@@ -8,8 +8,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validResult } from "../../extension/native-queue.js";
 
-const binary = process.env.AI_HIDER_BIN || fileURLToPath(new URL("../build/dist/bin/ai-hider", import.meta.url));
-const C = globalThis.AIHiderCore;
+const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
+const C = globalThis.DeckardCore;
 const hash = data => crypto.createHash("sha256").update(data).digest("hex");
 function frame(value) {
   const body = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
@@ -30,13 +30,13 @@ function replies(buffer) {
   return result;
 }
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-hider-native-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deckard-native-test-"));
   t.after(() => fs.rmSync(root, { recursive: true }));
   fs.mkdirSync(path.join(root, "models"));
   fs.writeFileSync(path.join(root, "models/packed.safetensors"), "fixture");
   fs.writeFileSync(path.join(root, "models/tokenizer.json"), "fixture");
   fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({
-    format: 1, model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
+    format: 1, product: "Deckard", version: "0.4.0", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
     flag_threshold: C.FLAG_THRESHOLD, experimental: true, extension_id: "a".repeat(32),
     weights_sha256: hash("fixture"), tokenizer_sha256: hash("fixture"),
   }));
@@ -50,6 +50,12 @@ test("native CLI help and pure native self-tests require no model", () => {
     const child = spawnSync(binary, [command], { encoding: "utf8", timeout: 15000 });
     assert.equal(child.status, 0, child.stderr);
   }
+  const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 15000 });
+  assert.equal(version.status, 0, version.stderr);
+  const packageVersion = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)))).version;
+  const extensionVersion = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../extension/manifest.json", import.meta.url)))).version;
+  assert.equal(version.stdout.trim(), packageVersion);
+  assert.equal(version.stdout.trim(), extensionVersion);
 });
 test("real compiled native messaging matches the extension's validator without loading a model", t => {
   const home = fixture(t);

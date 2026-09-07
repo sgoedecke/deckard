@@ -14,7 +14,7 @@ function event() {
 }
 async function harness(initial = {}, options = {}) {
   const events = { message: event(), removed: event(), updated: event(), permissions: event() };
-  const stored = { settings: initial, ...(options.flagThreshold !== undefined ? { flagThreshold: options.flagThreshold } : {}) };
+  const stored = { deckardSettings: initial, ...(options.flagThreshold !== undefined ? { deckardFlagThreshold: options.flagThreshold } : {}) };
   const granted = new Set(options.grants || (initial.enabled ? origins : []));
   const tabs = new Map((options.tabs || [{ id: 1, url: "https://example.com/article", incognito: false }])
     .map(tab => [tab.id, tab]));
@@ -35,7 +35,7 @@ async function harness(initial = {}, options = {}) {
       id: "test-id", getURL: path => `chrome-extension://test-id/${path}`,
       onMessage: events.message, onInstalled: event(), onStartup: event(),
       connectNative: name => {
-        assert.equal(name, "com.ai_hider.editlens");
+        assert.equal(name, "com.sgoedecke.deckard");
         const onMessage = event(), onDisconnect = event();
         const port = { onMessage, onDisconnect, sent: [], postMessage: message => port.sent.push(message),
           disconnect: () => { port.disconnected = true; onDisconnect.fire(); } };
@@ -100,6 +100,21 @@ test("manifest keeps host access optional and worker startup does not contact he
   assert.equal(h.injections.length, 0);
 });
 
+test("Deckard uses its own storage keys and leaves unrelated legacy settings untouched", async () => {
+  const legacy = { settings: { enabled: true }, flagThreshold: 0.7 };
+  const h = await harness({}, { initialRead: legacy, grants: origins });
+  Object.assign(h.stored, legacy);
+  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
+  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.9824231167326641);
+  await h.send({ type: "SET_ENABLED", enabled: true });
+  await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.85 });
+  assert.equal(h.stored.deckardSettings.enabled, true);
+  assert.equal(h.stored.deckardFlagThreshold, 0.85);
+  assert.deepEqual(h.stored.settings, legacy.settings);
+  assert.equal(h.stored.flagThreshold, legacy.flagThreshold);
+  assert.ok([...h.scripts.keys()].every(id => id.startsWith("deckard-")));
+});
+
 test("threshold preferences persist independently of On/Off and notify active documents without inference", async () => {
   const h = await harness({ enabled: true }, { flagThreshold: 0.85 });
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.85);
@@ -107,10 +122,10 @@ test("threshold preferences persist independently of On/Off and notify active do
   await h.send({ type: "BEGIN_SCAN", runId: "run" }, h.content);
   const result = await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.7 });
   assert.equal(result.result.flagThreshold, 0.7);
-  assert.equal(h.stored.flagThreshold, 0.7);
+  assert.equal(h.stored.deckardFlagThreshold, 0.7);
   assert.ok(h.messages.some(entry => entry.message.type === "SETTINGS_CHANGED" && entry.target.documentId === "document-1"));
   await h.send({ type: "SET_ENABLED", enabled: false });
-  assert.equal(h.stored.flagThreshold, 0.7);
+  assert.equal(h.stored.deckardFlagThreshold, 0.7);
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.7);
   assert.equal(h.ports.length, 0);
 });
@@ -124,7 +139,7 @@ test("invalid or failed threshold writes never change the active preference", as
   h.chrome.storage.local.set = async () => { throw new Error("Write failed"); };
   assert.equal((await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.8 })).ok, false);
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.85);
-  assert.equal(h.stored.flagThreshold, 0.85);
+  assert.equal(h.stored.deckardFlagThreshold, 0.85);
 });
 
 test("a frozen tab cannot block threshold saving or switching Off", async () => {
@@ -135,7 +150,7 @@ test("a frozen tab cannot block threshold saving or switching Off", async () => 
     ? new Promise(() => {}) : original(id, message, target);
   assert.equal((await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.9 })).ok, true);
   assert.equal((await h.send({ type: "SET_ENABLED", enabled: false })).result.enabled, false);
-  assert.equal(h.stored.flagThreshold, 0.9);
+  assert.equal(h.stored.deckardFlagThreshold, 0.9);
 });
 
 test("out-of-order progress authorization cannot restore an old scanning badge", async () => {
@@ -216,7 +231,7 @@ test("late tab URL notifications preserve an already authorized destination run"
   assert.equal(h.messages.some(entry => entry.message.type === "NAVIGATED"), false);
 });
 
-test("stale content scripts cannot consume Gradient results with an EditLens policy", async () => {
+test("stale content scripts cannot consume Deckard results with an incompatible policy", async () => {
   const h = await harness({ enabled: true });
   const response = await h.send({ type: "BEGIN_SCAN", runId: "old", protocol_version: 1 }, h.content);
   assert.equal(response.error.code, "extension_update_required");
@@ -265,7 +280,7 @@ test("global On requires both host grants, registers broad scripts and scans exi
   assert.equal((await h.send({ type: "GET_CONFIG" }, h.content)).result.enabled, true);
   assert.equal((await h.send({ type: "GET_CONFIG" },
     { ...h.content, url: "https://other.example:8443/article" })).result.enabled, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(h.stored)), { settings: { enabled: true } });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.stored)), { deckardSettings: { enabled: true } });
   await h.send({ type: "SET_ENABLED", enabled: false });
   assert.equal(h.scripts.size, 0);
   assert.equal(h.granted.size, 2, "Off retains grants so On does not reprompt");
@@ -281,7 +296,7 @@ test("permission revocation restores automatic tabs even after Chrome hides tab 
   await h.settle();
   assert.equal(h.scripts.size, 0);
   assert.equal(h.messages.at(-1).message.type, "STOP");
-  assert.equal(h.stored.settings.enabled, false);
+  assert.equal(h.stored.deckardSettings.enabled, false);
   assert.equal((await h.send({ type: "ANALYZE", runId: "auto", text: "x" }, h.content)).error.code, "cancelled");
 });
 
@@ -341,7 +356,7 @@ test("legacy settings and missing startup permission migrate to Off", async () =
     assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
     assert.equal(h.scripts.size, 0);
     assert.equal(h.injections.length, 0);
-    assert.deepEqual(JSON.parse(JSON.stringify(h.stored.settings)), { enabled: false });
+    assert.deepEqual(JSON.parse(JSON.stringify(h.stored.deckardSettings)), { enabled: false });
   }
 });
 
@@ -356,7 +371,7 @@ test("Off wins pending enable and BEGIN_SCAN permission races", async () => {
     await h.send({ type: "SET_ENABLED", enabled: false });
     resolve(true);
     await pending;
-    assert.equal(h.stored.settings.enabled, false);
+    assert.equal(h.stored.deckardSettings.enabled, false);
     assert.equal(h.scripts.size, 0);
     assert.equal((await h.send({ type: "ANALYZE", runId: "late", text: "x" }, h.content)).ok, false);
     assert.equal(h.ports.length, 0);
@@ -367,7 +382,7 @@ test("Off wins delayed startup storage read without injecting or loading native 
   let resolve;
   const h = await harness({ enabled: true }, { initialRead: new Promise(done => { resolve = done; }) });
   await h.send({ type: "SET_ENABLED", enabled: false });
-  resolve({ settings: { enabled: true } });
+  resolve({ deckardSettings: { enabled: true } });
   await h.settle();
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
   assert.equal(h.injections.length, 0);
@@ -400,7 +415,7 @@ test("a delayed tab injection cannot block other tabs or switching Off", async (
   await h.settle();
   assert.equal(h.messages.some(entry => entry.id === 2 && entry.message.type === "START"), true);
   await h.send({ type: "SET_ENABLED", enabled: false });
-  assert.equal(h.stored.settings.enabled, false);
+  assert.equal(h.stored.deckardSettings.enabled, false);
   assert.equal(h.scripts.size, 0);
   resolve([]);
   await h.settle();
@@ -452,7 +467,7 @@ test("authenticated progress drives tab badges without a popup and is never pers
       assert.match(h.badges.get(1).title, /Not proof of human authorship/);
     }
   }
-  assert.deepEqual(JSON.parse(JSON.stringify(h.stored)), { settings: { enabled: true } });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.stored)), { deckardSettings: { enabled: true } });
   await h.send({ type: "SET_ENABLED", enabled: false });
   await h.settle();
   assert.equal(h.badges.get(1).text, "");

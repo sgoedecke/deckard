@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Hider</title>
+  <title>Deckard</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header>
-    <h1><img src="icons/icon.svg" width="24" height="24" alt="">AI Hider</h1>
-    <label class="switch"><input id="enabled" type="checkbox" role="switch" aria-label="Enable AI Hider" disabled><span id="toggle-label">Off</span></label>
+    <h1><img src="icons/icon.svg" width="24" height="24" alt="">Deckard</h1>
+    <label class="switch"><input id="enabled" type="checkbox" role="switch" aria-label="Enable Deckard" disabled><span id="toggle-label">Off</span></label>
   </header>
   <label class="threshold-label" for="threshold">Threshold <output id="threshold-value" for="threshold"></output></label>
   <input id="threshold" type="range" min="70" max="99" step="any" aria-label="AI score threshold" title="Lower values mark more passages." disabled>
@@ -24,7 +24,7 @@
   </section>
   <section id="setup" class="setup" aria-label="Native helper setup" hidden>
     <h2>Native helper setup</h2>
-    <p class="hint">Run once from the project folder, then reload this extension and your pages:</p>
+    <p class="hint">After installing Deckard, repair registration, then reload this extension and your pages:</p>
     <p><code id="install-command"></code></p>
     <p class="hint">Extension ID: <code id="extension-id"></code></p>
   </section>

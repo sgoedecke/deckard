@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  if (globalThis.AIHiderCore?.SCANNER_VERSION === 5) return;
+  if (globalThis.DeckardCore?.SCANNER_VERSION === 5) return;
   const MAX_CHARS = 20000;
   const MIN_WORDS = 50;
   const MAX_PAGE_WORDS = 25000;
@@ -17,7 +17,7 @@
   const POLICY = "gradient-q4-composite-v1-retrospective";
   const FLAG_THRESHOLD = 0.9824231167326641;
   const HOST_PERMISSIONS = Object.freeze(["http://*/*", "https://*/*"]);
-  const EXCLUDED = "nav,header,footer,aside,form,button,input,textarea,select,option,pre,code,script,style,noscript,svg,details:not([open]),[inert],[contenteditable]:not([contenteditable='false']),[role='navigation'],[role='menu'],[role='textbox'],[hidden],[aria-hidden='true'],[data-ai-hider-owned]";
+  const EXCLUDED = "nav,header,footer,aside,form,button,input,textarea,select,option,pre,code,script,style,noscript,svg,details:not([open]),[inert],[contenteditable]:not([contenteditable='false']),[role='navigation'],[role='menu'],[role='textbox'],[hidden],[aria-hidden='true'],[data-deckard-owned]";
   function originOf(value) {
     try {
       const url = new URL(value);
@@ -218,7 +218,7 @@
       && result.model === MODEL && result.revision === MODEL_REVISION && result.policy === POLICY
       && result.flag_threshold === FLAG_THRESHOLD && result.experimental === true && result.min_words === MIN_WORDS);
   }
-  globalThis.AIHiderCore = Object.freeze({
+  globalThis.DeckardCore = Object.freeze({
     MAX_CHARS, MIN_WORDS, MAX_PAGE_WORDS, SCANNER_VERSION, FLAG_THRESHOLD, PROTOCOL_VERSION, MODEL, MODEL_REVISION, POLICY,
     validModelIdentity, validThreshold, HOST_PERMISSIONS, EXCLUDED, originOf, pageKey,
     normalizeSettings, wordCount, charCount, englishDocument, isVisible,

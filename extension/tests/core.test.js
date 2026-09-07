@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import "../core.js";
 import { modelIdentity } from "./model-fixture.js";
-const C = globalThis.AIHiderCore;
+const C = globalThis.DeckardCore;
 
 test("settings are opt-in, sanitized and contain no text or browsing history", () => {
   const defaults = { enabled: false, flagThreshold: C.FLAG_THRESHOLD };
@@ -57,7 +57,7 @@ test("one high-scoring chunk flags a mixed block despite a low mean and minimum"
   assert.equal(C.shouldFlag({ ...result, chunks: [result.chunks[0], { words: 25, score: 0.04 }] }, settings), false);
 });
 
-test("a stale backend or an EditLens threshold cannot authorize a Gradient mark", () => {
+test("a stale backend or an incompatible threshold cannot authorize a Deckard mark", () => {
   const result = { ...modelIdentity, status: "complete", max_score: 0.99,
     truncated: false, chunks: [{ words: 80 }] };
   for (const change of [{ model: "editlens" }, { protocol_version: 1 }, { flag_threshold: 0.9 },

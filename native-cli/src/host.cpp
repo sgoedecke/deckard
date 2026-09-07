@@ -15,7 +15,7 @@ namespace aihider {
 namespace {
 constexpr size_t frame_limit = 131072;
 void deadline(int) {
-    static constexpr char message[] = "AI Hider: inference_deadline\n";
+    static constexpr char message[] = "Deckard: inference_deadline\n";
     (void)!write(STDERR_FILENO, message, sizeof(message) - 1);
     _exit(124);
 }
@@ -179,12 +179,12 @@ int serve(const fs::path& home) {
             write_frame(std::cout, {{"id", id}, {"ok", true}, {"result", result}});
         } catch (const Error& error) {
             alarm(0);
-            std::cerr << "AI Hider: " << error.code << '\n';
+            std::cerr << "Deckard: " << error.code << '\n';
             if (error.code == "port_closed") return 0;
             write_frame(std::cout, failure(id, error.code, error.what()));
         } catch (const std::exception&) {
             alarm(0);
-            std::cerr << "AI Hider: inference_failed\n";
+            std::cerr << "Deckard: inference_failed\n";
             write_frame(std::cout, failure(id, "inference_failed", "Native inference failed. Check the installation."));
             return 3;
         }

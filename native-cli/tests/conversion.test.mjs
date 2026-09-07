@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const reference = fileURLToPath(new URL("../../cache/gradient-accelerator/exports/mlx-q4/packed.safetensors", import.meta.url));
-const generated = fileURLToPath(new URL("../../cache/native-build/clean-install/current/models/packed.safetensors", import.meta.url));
-const available = fs.existsSync(reference) && fs.existsSync(generated);
+const reference = process.env.DECKARD_REFERENCE_WEIGHTS;
+const generated = process.env.DECKARD_CONVERTED_WEIGHTS;
+const available = !!reference && !!generated && fs.existsSync(reference) && fs.existsSync(generated);
 function tensors(file) {
   const bytes = fs.readFileSync(file);
   assert.ok(bytes.length >= 245189442, "Published output must contain the full checkpoint, not the reserved empty file.");

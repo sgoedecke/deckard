@@ -1,9 +1,9 @@
 (() => {
   "use strict";
-  const C = globalThis.AIHiderCore;
+  const C = globalThis.DeckardCore;
   const $ = id => document.getElementById(id);
   $("extension-id").textContent = chrome.runtime.id;
-  $("install-command").textContent = `./install.sh --extension-id ${chrome.runtime.id} --replace`;
+  $("install-command").textContent = `"$HOME/Library/Application Support/Deckard/current/bin/deckard" install --extension-id ${chrome.runtime.id}`;
   let tabId;
   let busy = false;
   let editingThreshold = false;
@@ -98,7 +98,7 @@
     $("threshold").disabled = true;
     void (async () => {
       try {
-        if (!(await grant)) throw new Error("Access declined. AI Hider remains Off.");
+        if (!(await grant)) throw new Error("Access declined. Deckard remains Off.");
         const config = await request({ type: "SET_ENABLED", enabled });
         renderEnabled(config.enabled);
       } catch (e) {

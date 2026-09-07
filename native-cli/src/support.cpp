@@ -82,11 +82,11 @@ fs::path user_home() {
     return home;
 }
 fs::path default_home() {
-    const char* override_path = std::getenv("AI_HIDER_HOME");
+    const char* override_path = std::getenv("DECKARD_HOME");
     if (override_path && *override_path) return fs::absolute(override_path);
     auto bundled = executable_path().parent_path().parent_path();
     if (fs::is_regular_file(bundled / "install.json")) return bundled;
-    return user_home() / "Library/Application Support/AI Hider/current";
+    return user_home() / "Library/Application Support/Deckard/current";
 }
 std::string read_text(const fs::path& path, size_t limit) {
     if (!fs::is_regular_file(path) || fs::file_size(path) > limit)
@@ -126,7 +126,7 @@ void write_json(const fs::path& path, const Json& value) {
         if (descriptor >= 0) close(descriptor);
         std::error_code error;
         fs::remove(temporary, error);
-        if (error) std::cerr << "AI Hider: metadata_cleanup_failed\n";
+        if (error) std::cerr << "Deckard: metadata_cleanup_failed\n";
         throw;
     }
 }
@@ -217,14 +217,15 @@ Json identity() {
 Json installed_config(const fs::path& home, bool verify) {
     auto config = read_json(home / "install.json");
     if (!config.is_object() || config.value("format", Json()) != 1 ||
+        config.value("product", Json()) != "Deckard" || config.value("version", Json()) != app_version ||
         config.value("model", Json()) != model_id || config.value("revision", Json()) != revision ||
         config.value("policy", Json()) != policy_id || config.value("flag_threshold", Json()) != flag_threshold ||
         config.value("experimental", Json()) != true ||
         !config.value("weights_sha256", Json()).is_string() || !config.value("tokenizer_sha256", Json()).is_string())
-        throw Error("invalid_installation", "Installation metadata is incompatible. Run ai-hider install.");
+        throw Error("invalid_installation", "Installation metadata is incompatible. Run deckard install.");
     if (!fs::is_regular_file(home / "models/packed.safetensors") ||
         !fs::is_regular_file(home / "models/tokenizer.json"))
-        throw Error("missing_assets", "Model assets are missing. Run ai-hider install.");
+        throw Error("missing_assets", "Model assets are missing. Run deckard install.");
     if (verify) {
         require_hash(home / "models/packed.safetensors", config.at("weights_sha256").get<std::string>());
         require_hash(home / "models/tokenizer.json", config.at("tokenizer_sha256").get<std::string>());

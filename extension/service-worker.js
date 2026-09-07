@@ -1,15 +1,15 @@
 import "./core.js";
 import { NativeQueue, NativeError } from "./native-queue.js";
 
-const C = globalThis.AIHiderCore;
-const broker = new NativeQueue(() => chrome.runtime.connectNative("com.ai_hider.editlens"));
+const C = globalThis.DeckardCore;
+const broker = new NativeQueue(() => chrome.runtime.connectNative("com.sgoedecke.deckard"));
 const runs = new Map();
 const tabGenerations = new Map();
 const badgeJobs = new Map();
 const badgeVersions = new Map();
 const MAX_PAGE_WORDS = C.MAX_PAGE_WORDS;
 const MAX_FINDINGS = Math.ceil(MAX_PAGE_WORDS / C.MIN_WORDS);
-const SCRIPT_ID = "ai-hider-global";
+const SCRIPT_ID = "deckard-global";
 const sessionId = crypto.randomUUID();
 let tabSequence = 0;
 let enabled = false;
@@ -59,17 +59,17 @@ function sanitizeStatus(value) {
   };
 }
 function badge(status) {
-  if (!status || status.state === "stopped") return { text: "", color: "#737980", title: "AI Hider — Off or waiting for a scan" };
+  if (!status || status.state === "stopped") return { text: "", color: "#737980", title: "Deckard — Off or waiting for a scan" };
   const progress = `${status.scannedWords.toLocaleString("en-US")} words processed; ${status.marked} flagged passages`;
-  if (["starting", "scanning"].includes(status.state)) return { text: "...", color: "#216bce", title: `AI Hider — Scanning: ${progress}` };
-  if (status.state === "error") return { text: "!", color: "#b45309", title: `AI Hider — Scan error; coverage incomplete. ${progress}` };
+  if (["starting", "scanning"].includes(status.state)) return { text: "...", color: "#216bce", title: `Deckard — Scanning: ${progress}` };
+  if (status.state === "error") return { text: "!", color: "#b45309", title: `Deckard — Scan error; coverage incomplete. ${progress}` };
   const incomplete = status.state === "skipped" || status.limited || status.budgetExhausted
     || status.partial > 0 || status.skipped > 0 || status.analyzed === 0;
   if (status.marked) return { text: String(status.marked), color: "#b42318",
-    title: `AI Hider — ${progress}.${incomplete ? " Coverage incomplete." : ""} Possible AI involvement, not proof.` };
+    title: `Deckard — ${progress}.${incomplete ? " Coverage incomplete." : ""} Possible AI involvement, not proof.` };
   return { text: "0", color: "#287a46", title: incomplete
-    ? `AI Hider — No flags in analyzed text; incomplete or insufficient text. ${progress}. Not proof of human authorship.`
-    : `AI Hider — Scan complete; no flags. ${progress}. Not proof of human authorship.` };
+    ? `Deckard — No flags in analyzed text; incomplete or insufficient text. ${progress}. Not proof of human authorship.`
+    : `Deckard — Scan complete; no flags. ${progress}. Not proof of human authorship.` };
 }
 function updateBadge(tabId, status = null) {
   const version = (badgeVersions.get(tabId) || 0) + 1;
@@ -87,7 +87,7 @@ function updateBadge(tabId, status = null) {
       await chrome.action[method]({ tabId, ...fields });
     }
   }).catch(error => {
-    if (!/No tab with id|tab was closed/i.test(error?.message || "")) console.error("AI Hider: badge_update_failed");
+    if (!/No tab with id|tab was closed/i.test(error?.message || "")) console.error("Deckard: badge_update_failed");
   });
   badgeJobs.set(tabId, job);
   void job.then(() => {
@@ -108,7 +108,7 @@ function cancelTab(tabId) {
   broker.cancel(owner => owner.tabId === tabId);
 }
 function saveSettings(value) {
-  persistence = persistence.catch(() => {}).then(() => chrome.storage.local.set({ settings: { enabled: value } }));
+  persistence = persistence.catch(() => {}).then(() => chrome.storage.local.set({ deckardSettings: { enabled: value } }));
   return persistence;
 }
 function disable() {
@@ -145,7 +145,7 @@ async function synchronize() {
   const generation = revision;
   const active = enabled;
   const existing = (await chrome.scripting.getRegisteredContentScripts())
-    .filter(script => script.id === SCRIPT_ID || script.id.startsWith("ai-hider-site-"));
+    .filter(script => script.id === SCRIPT_ID || script.id.startsWith("deckard-site-"));
   if (generation !== revision) return;
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
   if (generation !== revision) return;
@@ -167,13 +167,13 @@ function scheduleSync() {
 }
 const ready = (async () => {
   const generation = revision;
-  const stored = await chrome.storage.local.get(["settings", "flagThreshold"]);
-  const config = C.normalizeSettings({ ...stored.settings, flagThreshold: stored.flagThreshold });
+  const stored = await chrome.storage.local.get(["deckardSettings", "deckardFlagThreshold"]);
+  const config = C.normalizeSettings({ ...stored.deckardSettings, flagThreshold: stored.deckardFlagThreshold });
   flagThreshold = config.flagThreshold;
   const allowed = config.enabled && await hasPermission();
   if (generation !== revision) return;
   enabled = Boolean(allowed);
-  // Migrate the old per-site/threshold settings to the single opt-in boolean.
+  // Persist only Deckard's opt-in state; legacy extension settings are untouched.
   await saveSettings(enabled);
 })().catch(error => { disable(); console.error(error); });
 
@@ -187,7 +187,7 @@ async function setEnabled(value) {
     return { enabled };
   }
   if (!(await hasPermission())) {
-    throw new NativeError("permission_required", "Allow access to HTTP and HTTPS pages to turn AI Hider on.");
+    throw new NativeError("permission_required", "Allow access to HTTP and HTTPS pages to turn Deckard on.");
   }
   if (generation !== revision) return { enabled };
   enabled = true;
@@ -213,7 +213,7 @@ async function handlePopup(message) {
       if (!C.validThreshold(message.flagThreshold)) throw new NativeError("invalid_request", "Threshold must be between 70 and 99.");
       const value = message.flagThreshold;
       persistence = persistence.catch(() => {}).then(async () => {
-        await chrome.storage.local.set({ flagThreshold: value });
+        await chrome.storage.local.set({ deckardFlagThreshold: value });
         flagThreshold = value;
       });
       await persistence;

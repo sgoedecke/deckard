@@ -48,7 +48,7 @@ test("75-word helpers fail closed instead of silently skipping 50-word passages"
 
 test("default timers retain the browser global receiver through requests and cleanup", async () => {
   const timers = new Map();
-  const context = vm.createContext({ timers, AIHiderCore: globalThis.AIHiderCore });
+  const context = vm.createContext({ timers, DeckardCore: globalThis.DeckardCore });
   const source = fs.readFileSync(new URL("../native-queue.js", import.meta.url), "utf8")
     .replace(/^import .*;\n/gm, "").replace(/^export /gm, "");
   vm.runInContext(`

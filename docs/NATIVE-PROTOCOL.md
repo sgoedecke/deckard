@@ -1,10 +1,10 @@
-# Native messaging protocol v2 (Gradient)
+# Deckard 0.4.0 native messaging protocol v2 (Gradient)
 
-Implemented by `native-cli/`. The Python modules beside this document are the
-legacy EditLens v1 implementation and are incompatible with the current extension.
+Implemented by `native-cli/`; release users need no Python runtime.
 
-Host name: `com.ai_hider.editlens`. Chrome launches one process for the service
-worker's `connectNative` port. Each message is UTF-8 JSON preceded by a four-byte
+Host name: `com.sgoedecke.deckard`. Chrome launches `deckard start` for the service
+worker's `connectNative` port; this is a stdio host, not an HTTP daemon.
+Each message is UTF-8 JSON preceded by a four-byte
 unsigned length in native byte order. Stdout contains only these frames; stderr
 contains error codes without page text.
 
@@ -25,14 +25,14 @@ Ping does not load the model. The response reports runtime version, model
 revision, whether a model is loaded, scheduling configuration, and input limits.
 `ready` confirms the protocol/runtime installation, not a completed inference.
 Full asset hashes are checked before the first tokenizer/model load or with
-`ai-hider status`, not on lightweight ping requests.
+`deckard status`, not on lightweight ping requests.
 
 ```json
 {"id":"block-1","type":"analyze","protocol_version":2,"text":"A passage of at least 50 words..."}
 ```
 
 The text is limited to 20,000 Unicode characters. The host counts whitespace-
-separated words and tokenizes the original text, without EditLens cleaning.
+separated words and tokenizes the original text.
 It scores at most four balanced windows of 510 content tokens each. Windows
 have Gradient CLS=1 and SEP=2 added separately; no fixed-length padding is used.
 Missing or incompatible protocol versions fail closed with
@@ -81,7 +81,7 @@ Text is colored red, never collapsed or hidden.
 
 The identity fields above, including `min_words: 50`, appear in **every successful result**, including
 ping and skipped responses. Clients must validate them before consuming scores.
-Older helpers without this word-limit identity must be updated with `./install.sh`;
+Older helpers without this word-limit identity must be updated with a matching Deckard release;
 they are rejected rather than silently skipping 50-74-word passages.
 The native `flag_threshold` identity field remains the fixed reference/default,
 not the user's setting. The extension validates that identity before applying
@@ -105,7 +105,7 @@ valid page-local cached results without another native inference.
 {
   "id": "block-1",
   "ok": false,
-  "error": {"code": "missing_assets", "message": "Model assets are missing. Run ai-hider install."}
+  "error": {"code": "missing_assets", "message": "Model assets are missing. Run deckard install."}
 }
 ```
 

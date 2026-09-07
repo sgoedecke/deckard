@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-CACHE="$ROOT/cache/native-build"
+CACHE="${NATIVE_CACHE:-$ROOT/cache/native-build}"
 SDK="$CACHE/mlx-sdk"
 DOWNLOADS="$CACHE/downloads"
 case "$(uname -s)/$(uname -m)" in
@@ -13,6 +13,19 @@ MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 15 ] || { echo "macOS 15 or newer is required." >&2; exit 1; }
 command -v cmake >/dev/null || { echo "Install CMake first (for example: brew install cmake)." >&2; exit 1; }
 xcrun --find clang++ >/dev/null
+if [ "$CACHE" != "$ROOT/cache/native-build" ]; then
+  for required in mlx-sdk/mlx/share/cmake/MLX/MLXConfig.cmake \
+    json/include/nlohmann/json.hpp cargo/registry \
+    rustup/toolchains/1.90.0-aarch64-apple-darwin/bin/cargo \
+    licenses/MLX-LICENSE licenses/NLOHMANN-LICENSE; do
+    [ -e "$CACHE/$required" ] || {
+      echo "External NATIVE_CACHE is read-only and incomplete: $required" >&2
+      exit 1
+    }
+  done
+  echo "Using existing read-only native dependencies in $CACHE"
+  exit 0
+fi
 mkdir -p "$DOWNLOADS" "$SDK"
 mkdir -p "$CACHE/json/include/nlohmann" "$CACHE/licenses"
 
@@ -60,4 +73,5 @@ if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
   "$DOWNLOADS/rustup-init" -y --no-modify-path --profile minimal --default-toolchain 1.90.0
 fi
 "$CARGO_HOME/bin/rustc" --version
+"$CARGO_HOME/bin/cargo" fetch --locked --manifest-path "$ROOT/native-cli/tokenizer/Cargo.toml"
 echo "Native dependencies ready in $CACHE"

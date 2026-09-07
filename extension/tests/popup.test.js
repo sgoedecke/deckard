@@ -6,7 +6,7 @@ import "../core.js";
 
 const source = fs.readFileSync(new URL("../popup.js", import.meta.url), "utf8");
 const html = fs.readFileSync(new URL("../popup.html", import.meta.url), "utf8");
-async function harness({ enabled = false, granted = true, flagThreshold = globalThis.AIHiderCore.FLAG_THRESHOLD,
+async function harness({ enabled = false, granted = true, flagThreshold = globalThis.DeckardCore.FLAG_THRESHOLD,
   tab = { id: 1, url: "https://example.com", title: "Example" } } = {}) {
   const element = () => ({
     textContent: "", checked: false, disabled: true, events: {}, children: [],
@@ -32,7 +32,7 @@ async function harness({ enabled = false, granted = true, flagThreshold = global
     tabs: { query: async () => [tab] },
   };
   vm.runInNewContext(source, {
-    chrome, AIHiderCore: globalThis.AIHiderCore,
+    chrome, DeckardCore: globalThis.DeckardCore,
     document: { getElementById: id => elements.get(id), createElement: element },
     window: { addEventListener: () => {} }, setInterval: callback => { poll = callback; return 1; },
     clearInterval: () => {},
@@ -49,20 +49,21 @@ async function harness({ enabled = false, granted = true, flagThreshold = global
 test("popup has one On/Off switch, a threshold slider, and read-only setup", async () => {
   assert.equal([...html.matchAll(/<input\b/g)].length, 2);
   assert.match(html, /type="range" min="70" max="99" step="any"/);
-  assert.match(html, /role="switch" aria-label="Enable AI Hider"/);
+  assert.match(html, /role="switch" aria-label="Enable Deckard"/);
   assert.doesNotMatch(html, /<select\b|<textarea\b|type="number"|<details\b/);
   const h = await harness();
   assert.equal(h.elements.get("enabled").checked, false);
   assert.equal(h.elements.get("enabled").disabled, false);
   assert.equal(h.elements.get("toggle-label").textContent, "Off");
   assert.equal(h.calls.some(call => call.permission || call.type === "PING"), false);
-  assert.match(h.elements.get("install-command").textContent, /\.\/install\.sh --extension-id test-id --replace/);
+  assert.equal(h.elements.get("install-command").textContent,
+    '"$HOME/Library/Application Support/Deckard/current/bin/deckard" install --extension-id test-id');
   assert.equal(h.elements.get("setup").hidden, true);
 });
 
 test("the slider preserves the precise default and only saves when committed", async () => {
   const h = await harness();
-  assert.equal(Number(h.elements.get("threshold").value), globalThis.AIHiderCore.FLAG_THRESHOLD * 100);
+  assert.equal(Number(h.elements.get("threshold").value), globalThis.DeckardCore.FLAG_THRESHOLD * 100);
   assert.equal(h.elements.get("threshold-value").textContent, "98.24");
   assert.equal(h.calls.some(call => call.type === "SET_THRESHOLD"), false);
   h.elements.get("threshold").value = "80";

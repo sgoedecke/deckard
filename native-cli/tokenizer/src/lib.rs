@@ -52,7 +52,7 @@ fn boundary(f: impl FnOnce() -> Result<(), i32>) -> i32 {
     INIT.call_once(|| {
         tokenizers::utils::parallelism::set_parallelism(false);
         // The default panic hook can print tokenizer input before unwind is caught.
-        std::panic::set_hook(Box::new(|_| eprintln!("AI Hider: tokenizer_panic")));
+        std::panic::set_hook(Box::new(|_| eprintln!("Deckard: tokenizer_panic")));
     });
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(())) => 0,
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn real_tokenizer_from_explicit_environment() {
-        let Some(path) = std::env::var_os("AI_HIDER_TOKENIZER_JSON") else { return };
+        let Some(path) = std::env::var_os("DECKARD_TOKENIZER_JSON") else { return };
         let path = path.to_str().expect("fixture path must be UTF-8");
         unsafe {
             let mut h = ptr::null_mut();
@@ -419,8 +419,8 @@ mod tests {
     #[test]
     fn explicit_tokenizer_fixtures_have_identical_behavior() {
         let (Some(first), Some(second)) = (
-            std::env::var_os("AI_HIDER_TOKENIZER_JSON"),
-            std::env::var_os("AI_HIDER_TOKENIZER_COMPARE_JSON"),
+            std::env::var_os("DECKARD_TOKENIZER_JSON"),
+            std::env::var_os("DECKARD_TOKENIZER_COMPARE_JSON"),
         ) else { return };
         let first = prepare(Tokenizer::from_file(first).unwrap()).unwrap();
         let second = prepare(Tokenizer::from_file(second).unwrap()).unwrap();

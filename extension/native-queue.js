@@ -132,7 +132,7 @@ export class NativeQueue {
       || (!message.ok && (!message.error || typeof message.error.code !== "string"
         || typeof message.error.message !== "string"))) {
       this.failAll(new NativeError("protocol_error",
-        "Malformed or incompatible native response. Update the helper with ./install.sh, then reload the extension and page."), true);
+        "Malformed or incompatible native response. Update Deckard, then reload the extension and page."), true);
       return;
     }
     this.clearTimer(job.timer);
@@ -144,4 +144,4 @@ export class NativeQueue {
 }
 import "./core.js";
 
-const nativeCore = globalThis.AIHiderCore;
+const nativeCore = globalThis.DeckardCore;

@@ -56,10 +56,10 @@ class Node {
   scrollIntoView(options) { this.scrolled = options; }
   setAttribute(key, value) { this.attrs[key] = value; }
   getAttribute(key) { return key === "class" ? [...this.classes].join(" ") : this.attrs[key] ?? null; }
-  hasAttribute(key) { return key === "data-ai-hider-owned" ? Boolean(this.dataset.aiHiderOwned) : key in this.attrs; }
+  hasAttribute(key) { return key === "data-deckard-owned" ? Boolean(this.dataset.deckardOwned) : key in this.attrs; }
   closest(selector) {
-    if (selector === "[data-ai-hider-owned]") {
-      for (let node = this; node; node = node.parentElement) if (node.hasAttribute("data-ai-hider-owned")) return node;
+    if (selector === "[data-deckard-owned]") {
+      for (let node = this; node; node = node.parentElement) if (node.hasAttribute("data-deckard-owned")) return node;
     }
     return null;
   }
@@ -105,11 +105,11 @@ async function harness({ auto = false, count = 1, getConfig, budget = 25000 } = 
   const context = vm.createContext({
     document, window, chrome, location: { href: "https://example.com/article" },
     crypto: { randomUUID: () => `id-${++id}` },
-    AIHiderCore: { ...globalThis.AIHiderCore, MAX_PAGE_WORDS: budget,
+    DeckardCore: { ...globalThis.DeckardCore, MAX_PAGE_WORDS: budget,
       selectBlocks: () => ({ blocks: blocks.filter(node => node.isConnected).map((node, index) => ({
-        key: `block-${index}`, node, text: node.text, words: globalThis.AIHiderCore.wordCount(node.text),
+        key: `block-${index}`, node, text: node.text, words: globalThis.DeckardCore.wordCount(node.text),
         parts: [{ node, text: node.text, whole: true, ranges: [] }],
-      })), totalWords: blocks.filter(node => node.isConnected).reduce((n, node) => n + globalThis.AIHiderCore.wordCount(node.text), 0),
+      })), totalWords: blocks.filter(node => node.isConnected).reduce((n, node) => n + globalThis.DeckardCore.wordCount(node.text), 0),
         skipped: 0, limited: false }),
       groupCurrent: block => { textReads++; return block.parts.every(part => part.node.isConnected && part.node.text === part.text); },
       readText: node => { textReads++; return node.isConnected ? node.text : ""; },
@@ -162,7 +162,7 @@ test("content script is idempotent and marks prose red without hiding or replaci
   assert.equal(h.root.children.filter(node => node.shadow).length, 0, "no banners, controls, or global panel");
   const sheet = h.root.children.find(node => node.tag === "style");
   const flagClass = [...h.blocks[0].classes][0];
-  assert.match(flagClass, /^ai-hider-marked-/);
+  assert.match(flagClass, /^deckard-marked-/);
   assert.ok(sheet.textContent.startsWith(`.${flagClass},.${flagClass} :is(`));
   assert.match(sheet.textContent, /:is\([^)]*\bspan,a,em,strong\b/);
   assert.match(sheet.textContent, /\{color:#d00!important;-webkit-text-fill-color:#d00!important\}/);
@@ -193,7 +193,7 @@ test("a complete 50-word passage is scored and marked without changing the cutof
   assert.equal(status.analyzed, 1);
   assert.equal(status.marked, 1);
   assert.equal(status.usedWords, 50);
-  assert.equal(globalThis.AIHiderCore.FLAG_THRESHOLD, 0.9824231167326641);
+  assert.equal(globalThis.DeckardCore.FLAG_THRESHOLD, 0.9824231167326641);
 });
 
 test("low, partial, or short-chunk results leave no page annotations", async () => {
@@ -376,7 +376,7 @@ test("Off prevents delayed initial configuration from starting any work", async 
   await h.settle();
   assert.equal(h.analyses.length, 0);
   assert.equal(h.observer.active, false);
-  assert.equal(h.root.children.filter(node => node.dataset.aiHiderOwned).length, 0);
+  assert.equal(h.root.children.filter(node => node.dataset.deckardOwned).length, 0);
 });
 
 test("Off prevents a late BEGIN_SCAN response from scheduling inference", async () => {
@@ -544,7 +544,7 @@ test("helper errors pause observation without retries and remain visible in popu
 
 test("known unsupported language is disclosed without inference or a page overlay", async () => {
   const h = await harness();
-  h.context.AIHiderCore.selectBlocks = () => ({ blocks: [], skipped: 0, limited: false, reason: "non_english" });
+  h.context.DeckardCore.selectBlocks = () => ({ blocks: [], skipped: 0, limited: false, reason: "non_english" });
   await h.start();
   assert.equal(h.analyses.length, 0);
   assert.equal((await h.send({ type: "PAGE_STATUS" })).state, "skipped");
@@ -576,7 +576,7 @@ test("short neighboring paragraphs share a group mark and jump link; changes inv
   const h = await harness({ count: 2 });
   h.blocks[0].text = "short ".repeat(40).trim();
   h.blocks[1].text = "next ".repeat(40).trim();
-  h.context.AIHiderCore.selectBlocks = () => ({
+  h.context.DeckardCore.selectBlocks = () => ({
     blocks: [{ key: "combined", node: h.blocks[0], text: h.blocks.map(node => node.text).join("\n\n"), words: 80,
       parts: h.blocks.map(node => ({ node, text: node.text, whole: true, ranges: [] })) }],
     skipped: 0, limited: false, totalWords: 80,
@@ -604,7 +604,7 @@ test("a split long element highlights only the scanned range, jumps to that rang
   h.context.window.innerHeight = 900;
   h.context.window.scrollBy = options => { h.context.window.scrolled = options; };
   const range = { startContainer: { parentElement: h.blocks[0] }, getBoundingClientRect: () => ({ top: 3000 }) };
-  h.context.AIHiderCore.selectBlocks = () => ({
+  h.context.DeckardCore.selectBlocks = () => ({
     blocks: [{ key: "slice", node: h.blocks[0], text: h.blocks[0].text, words: 80,
       parts: [{ node: h.blocks[0], text: h.blocks[0].text, whole: false, ranges: [range] }] }],
     skipped: 0, limited: true, totalWords: 80,

@@ -1,11 +1,11 @@
 (() => {
   "use strict";
-  if (globalThis.__aiHiderLocal) return;
-  globalThis.__aiHiderLocal = true;
-  const C = globalThis.AIHiderCore;
+  if (globalThis.__deckardLocal) return;
+  globalThis.__deckardLocal = true;
+  const C = globalThis.DeckardCore;
   if (!C || !C.originOf(location.href) || window.top !== window) return;
   const suffix = crypto.randomUUID().replaceAll("-", "");
-  const flagClass = `ai-hider-marked-${suffix}`;
+  const flagClass = `deckard-marked-${suffix}`;
   const records = new Map();
   const processed = new Map();
   const classOwners = new Map();
@@ -45,7 +45,7 @@
   }
   function owned(tag) {
     const node = document.createElement(tag);
-    node.dataset.aiHiderOwned = suffix;
+    node.dataset.deckardOwned = suffix;
     return node;
   }
   function ensureStyles() {
@@ -348,14 +348,14 @@
   }
   function ownMutation(mutation) {
     const target = mutation.target.nodeType === 1 ? mutation.target : mutation.target.parentElement;
-    if (target?.closest("[data-ai-hider-owned]")) return true;
+    if (target?.closest("[data-deckard-owned]")) return true;
     if (mutation.type === "attributes" && mutation.attributeName === "class") {
       const clean = value => (value || "").split(/\s+/).filter(name => name && name !== flagClass).sort().join(" ");
       if (clean(mutation.oldValue) === clean(target.getAttribute("class"))) return true;
     }
     if (mutation.type === "childList") {
       return [...mutation.addedNodes, ...mutation.removedNodes].every(node =>
-        node.nodeType === 1 && node.hasAttribute("data-ai-hider-owned"));
+        node.nodeType === 1 && node.hasAttribute("data-deckard-owned"));
     }
     return false;
   }
