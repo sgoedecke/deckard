@@ -13,11 +13,11 @@ and locally; use the toolbar switch to turn Off and remove marks.
 
 ## Getting started
 
-Install [Deckard v0.4.0](https://github.com/sgoedecke/deckard/releases/tag/v0.4.0)
+Install [Deckard v0.4.1](https://github.com/sgoedecke/deckard/releases/tag/v0.4.1)
 from your terminal:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.4.0/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.4.1/install.sh | bash
 ```
 
 The command downloads and executes a shell script. Review the published script
@@ -31,10 +31,9 @@ Chrome still requires this **manual** step:
 2. Choose **Load unpacked** and select
    `~/Library/Application Support/Deckard/extension` (use Command-Shift-G in
    the folder picker). Keep this stable installed folder in place.
-3. Pin Deckard if desired and open a normal HTTP(S) page. In v0.4.1, new installs
-   start **On** with website access. If you previously saved **Off**, or are using
-   the v0.4.0 installer above, turn Deckard **On** and approve website access if
-   Chrome requests it.
+3. Pin Deckard if desired and open a normal HTTP(S) page. New installs start
+   **On** with website access. If you previously saved **Off**, turn Deckard
+   **On** and approve website access if Chrome requests it.
 
 Requirements: **Apple Silicon (arm64), macOS 15 or later, and Google Chrome
 121 or later**. Intel Macs, other operating systems and other browsers are
@@ -139,7 +138,7 @@ scripts/package-release.sh --model-dir /path/to/canonical/mlx-q4
 
 The build reads the external dependency cache without modifying it. Packaging
 also accepts `--native-dist native-cli/build/dist` and
-`--output-dir dist/v0.4.0`. These are maintainer steps, not evidence that a
+`--output-dir dist/v0.4.1`. These are maintainer steps, not evidence that a
 release has been published. Release archives bundle prepared model assets;
 source installs must pass `--model-dir` explicitly. The installer does not
 download or convert upstream FP32 weights automatically.
