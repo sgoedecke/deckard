@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "AI Hider (local experiment)",
+  "description": "One switch to mark possible AI involvement using offline Gradient analysis. Experimental; off by default.",
+  "version": "0.5.0",
+  "minimum_chrome_version": "121",
+  "permissions": ["scripting", "storage", "nativeMessaging"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {"service_worker": "service-worker.js", "type": "module"},
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "24": "icons/icon-24.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

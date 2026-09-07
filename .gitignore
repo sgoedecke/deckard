@@ -1,0 +1,10 @@
+/cache/
+/dist/
+/node_modules/
+/native-cli/build/
+/native-cli/tokenizer/target/
+/native-cli/tests/.uninstall-*/
+*.log
+.DS_Store
+*.pem
+*.key

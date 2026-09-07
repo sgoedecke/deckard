@@ -1,0 +1,9 @@
+{
+  "name": "deckard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test extension/tests/*.test.js",
+    "test:native": "node --test native-cli/tests/*.test.mjs"
+  }
+}
