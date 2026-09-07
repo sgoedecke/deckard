@@ -2,7 +2,7 @@
 
 Named after the original AI hunter in _Blade Runner_, Deckard is a Chrome extension that detects AI-generated text on pages you visit.
 
-![Deckard marking passages red on EndlessWiki](docs/images/deckard-endlesswiki.jpg)
+![Deckard's toolbar icon and open popup above passages marked red on EndlessWiki](docs/images/deckard-endlesswiki.jpg)
 
 ## Getting started
 
