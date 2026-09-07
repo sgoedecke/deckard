@@ -76,8 +76,9 @@ for (const shell of ["zsh", "bash"]) for (const original of [null, "", "export P
 
 test("upgrade updates extension at stable path; uninstall preserves unrelated profile and extension files", { skip: !available }, t => {
   const f = fixture(t);
-  fs.writeFileSync(f.profile, "unaltered");
+  fs.writeFileSync(f.profile, "export PERSONAL=kept");
   assert.equal(f.install().status, 0);
+  fs.appendFileSync(f.profile, "export OTHER=also-kept\n");
   const copy = path.join(f.root, "new extension");
   fs.cpSync(extension, copy, { recursive: true });
   fs.appendFileSync(path.join(copy, "popup.css"), "\n/* upgrade fixture */\n");
@@ -88,8 +89,22 @@ test("upgrade updates extension at stable path; uninstall preserves unrelated pr
   fs.writeFileSync(path.join(f.home, "extension/personal.txt"), "keep");
   result = f.run("uninstall");
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.readFileSync(f.profile, "utf8"), "unaltered# unrelated later edit\n");
+  assert.equal(fs.readFileSync(f.profile, "utf8"), "export PERSONAL=kept\nexport OTHER=also-kept\n# unrelated later edit\n");
+  const shell = spawnSync("/bin/zsh", ["-f", "-c",
+    '. "$HOME/.zshrc"; printf "%s\\n" "$PERSONAL" "$OTHER"'], { encoding: "utf8", env: f.env });
+  assert.equal(shell.status, 0, shell.stderr);
+  assert.equal(shell.stdout, "kept\nalso-kept\n");
   assert.equal(fs.readFileSync(path.join(f.home, "extension/personal.txt"), "utf8"), "keep");
+});
+
+test("uninstall preserves a command appended after a no-newline profile", { skip: !available }, t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.profile, "export PERSONAL=kept");
+  assert.equal(f.install().status, 0);
+  fs.appendFileSync(f.profile, "export OTHER=also-kept\n");
+  const result = f.run("uninstall");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(f.profile, "utf8"), "export PERSONAL=kept\nexport OTHER=also-kept\n");
 });
 
 for (const scenario of ["unowned-block", "path-command", "profile-symlink", "profile-hardlink", "registration", "extension-directory"]) {

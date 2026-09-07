@@ -31,7 +31,12 @@ std::string strip_block(const std::string& contents, const std::string& block) {
     if (offset == std::string::npos || contents.find(block, offset + block.size()) != std::string::npos)
         conflict("The owned PATH block was changed or removed; restore it before continuing.");
     auto result = contents;
-    result.erase(offset, block.size());
+    const auto end = offset + block.size();
+    // The owned block may include the original file's missing final newline.
+    // Keep a separator if the user subsequently appended another command.
+    const bool separator = offset > 0 && end < contents.size() &&
+        contents[offset - 1] != '\n' && contents[end] != '\n';
+    result.replace(offset, block.size(), separator ? "\n" : "");
     if (result.find(begin_marker) != std::string::npos || result.find(end_marker) != std::string::npos)
         conflict("Conflicting Deckard PATH markers were found.");
     return result;
