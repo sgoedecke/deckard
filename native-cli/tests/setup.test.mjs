@@ -34,6 +34,35 @@ function fixture(t, shell = "zsh") {
   return { root, user, home, manifests, profile, env, run, install };
 }
 
+function installPrevious(f) {
+  return spawnSync(process.env.DECKARD_PREVIOUS_BIN,
+    ["install", "--home", f.home, "--model-dir", model, "--extension-dir", extension,
+      "--manifest-dir", f.manifests], { encoding: "utf8", timeout: 30000, env: f.env });
+}
+
+test("Deckard 0.4.0 upgrades in place and both release versions uninstall together",
+  { skip: !available || !process.env.DECKARD_PREVIOUS_BIN }, t => {
+    const f = fixture(t);
+    const original = "export PERSONAL=kept";
+    fs.writeFileSync(f.profile, original);
+    const previous = installPrevious(f);
+    assert.equal(previous.status, 0, previous.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.4.0");
+    const profile = fs.readFileSync(f.profile, "utf8");
+    const inode = fs.statSync(path.join(f.home, ".install.lock")).ino;
+    const upgraded = f.install();
+    assert.equal(upgraded.status, 0, upgraded.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.4.1");
+    assert.equal(fs.readFileSync(f.profile, "utf8"), profile);
+    assert.equal(fs.readdirSync(path.join(f.home, "releases")).length, 2);
+    const removed = f.run("uninstall");
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.readFileSync(f.profile, "utf8"), original);
+    assert.equal(fs.statSync(path.join(f.home, ".install.lock")).ino, inode);
+    assert.deepEqual(fs.readdirSync(f.home), [".install.lock"]);
+    assert.ok(!fs.existsSync(path.join(f.manifests, manifestName)));
+  });
+
 for (const shell of ["zsh", "bash"]) for (const original of [null, "", "export PERSONAL=kept", "# owned by user\n\n"]) {
   test(`owned ${shell} setup restores profile bytes (${JSON.stringify(original)})`, { skip: !available }, t => {
     const f = fixture(t, shell);
@@ -263,16 +292,18 @@ test("interrupted uninstall resumes after PATH removal and partial extension del
   assert.equal(f.run("uninstall").status, 0);
 });
 
-test("interrupted final release-directory removal uses saved ownership instead of accepting arbitrary empty directories", { skip: !available }, t => {
+for (const previous of [false, true]) test(`interrupted final release-directory removal validates saved ownership (${previous ? "0.4.0" : "current"})`,
+  { skip: !available || (previous && !process.env.DECKARD_PREVIOUS_BIN) }, t => {
   const f = fixture(t);
-  assert.equal(f.install(["--shell", "none"]).status, 0);
+  const installed = previous ? installPrevious(f) : f.install(["--shell", "none"]);
+  assert.equal(installed.status, 0, installed.stderr);
   const metadata = JSON.parse(fs.readFileSync(path.join(f.home, "setup.json")));
   const relative = fs.readlinkSync(path.join(f.home, "current"));
   const release = path.join(f.home, relative);
   const config = JSON.parse(fs.readFileSync(path.join(release, "install.json")));
   const digest = createHash("sha256").update(JSON.stringify(config)).digest("hex");
   const drained = { ...metadata, extension_files: {}, uninstalling: true,
-    release_cleanup: { [path.basename(release)]: { product: "Deckard", version: "0.4.0", metadata_sha256: digest } } };
+    release_cleanup: { [path.basename(release)]: { product: "Deckard", version: config.version, metadata_sha256: digest } } };
   fs.rmSync(path.join(f.home, "extension"), { recursive: true });
   fs.unlinkSync(path.join(f.home, "current"));
   fs.unlinkSync(path.join(f.manifests, manifestName));

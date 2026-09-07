@@ -168,12 +168,17 @@ function scheduleSync() {
 const ready = (async () => {
   const generation = revision;
   const stored = await chrome.storage.local.get(["deckardSettings", "deckardFlagThreshold"]);
-  const config = C.normalizeSettings({ ...stored.deckardSettings, flagThreshold: stored.deckardFlagThreshold });
+  const config = C.normalizeSettings({
+    ...stored.deckardSettings,
+    enabled: stored.deckardSettings?.enabled === undefined ? true : stored.deckardSettings.enabled,
+    flagThreshold: stored.deckardFlagThreshold,
+  });
   flagThreshold = config.flagThreshold;
   const allowed = config.enabled && await hasPermission();
   if (generation !== revision) return;
   enabled = Boolean(allowed);
-  // Persist only Deckard's opt-in state; legacy extension settings are untouched.
+  // Only a missing preference defaults On, and only with Chrome's host grants.
+  // Persist Deckard's state without touching unrelated legacy settings.
   await saveSettings(enabled);
 })().catch(error => { disable(); console.error(error); });
 
@@ -260,16 +265,32 @@ async function handlePopup(message) {
     default: throw new NativeError("invalid_request", "Unknown popup request.");
   }
 }
-async function authorizeRun(tabId, run, sender, runId) {
+async function authorizePage(tabId, documentId, url) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!safeTab(tab) || tab.url !== url) throw new NativeError("cancelled", "This page has changed.");
+  // MessageSender.url is the original document URL even after pushState.
+  // Probe Chrome's current top frame, not a possibly cached sender document.
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] }, world: "ISOLATED",
+    func: () => location.href,
+  });
+  const live = await chrome.tabs.get(tabId);
+  if (results.length !== 1 || results[0].frameId !== 0 || results[0].documentId !== documentId
+    || results[0].result !== url || !safeTab(live) || live.url !== url) {
+    throw new NativeError("cancelled", "This page has changed.");
+  }
+}
+async function authorizeRun(tabId, run, sender, message) {
   const current = () => enabled && run && runs.get(tabId) === run
-    && (!sender || (run.runId === runId && run.documentId === sender.documentId && run.url === sender.url));
+    && (!sender || (run.runId === message.runId && run.documentId === sender.documentId
+      && run.url === message.page_url));
   if (!current()) throw new NativeError("cancelled", "Scan is no longer current.");
   const generation = revision;
   const allowed = await hasPermission();
-  const tab = allowed ? await chrome.tabs.get(tabId) : null;
-  if (!allowed || generation !== revision || !current() || !safeTab(tab) || tab.url !== run.url) {
+  if (!allowed || generation !== revision || !current()) {
     throw new NativeError("cancelled", "Scan is no longer current.");
   }
+  await authorizePage(tabId, run.documentId, run.url);
   // The caller resumes in another microtask; recheck before it commits metadata
   // or routes a request so Off/navigation cannot slip between authorization and use.
   return () => {
@@ -278,36 +299,55 @@ async function authorizeRun(tabId, run, sender, runId) {
 }
 async function handleContent(message, sender) {
   if (message.protocol_version !== C.PROTOCOL_VERSION || message.scanner_version !== C.SCANNER_VERSION) {
-    throw new NativeError("extension_update_required", "Reload this page to use the updated Gradient extension.");
+    throw new NativeError("extension_update_required", "Reload this page to use the updated Deckard extension.");
+  }
+  if (typeof message.page_url !== "string" || !C.originOf(message.page_url)) {
+    throw new NativeError("invalid_request", "Missing or invalid page URL.");
+  }
+  if (C.originOf(message.page_url) !== C.originOf(sender.url)) {
+    throw new NativeError("cancelled", "This page has changed.");
   }
   await ready;
   const tabId = sender.tab.id;
   switch (message.type) {
-    case "GET_CONFIG": return { enabled, flagThreshold, sessionId };
+    case "GET_CONFIG": {
+      const generation = revision;
+      const tabGeneration = tabGenerations.get(tabId);
+      if (enabled) {
+        if (!(await hasPermission())) throw new NativeError("cancelled", "Page access was revoked.");
+        await authorizePage(tabId, sender.documentId, message.page_url);
+        if (generation !== revision || tabGeneration !== tabGenerations.get(tabId)) {
+          throw new NativeError("cancelled", "This page has changed.");
+        }
+      }
+      return { enabled, flagThreshold, sessionId };
+    }
     case "BEGIN_SCAN": {
       if (!validRun(message.runId)) throw new NativeError("invalid_request", "Invalid scan.");
       const generation = revision;
-      cancelTab(tabId);
       const tabGeneration = tabGenerations.get(tabId);
       const allowed = enabled && await hasPermission();
-      const tab = allowed ? await chrome.tabs.get(tabId) : null;
-      if (!allowed || !enabled || generation !== revision || tabGeneration !== tabGenerations.get(tabId)
-        || !safeTab(tab) || tab.url !== sender.url) {
+      if (allowed) await authorizePage(tabId, sender.documentId, message.page_url);
+      if (!allowed || !enabled || generation !== revision || tabGeneration !== tabGenerations.get(tabId)) {
         throw new NativeError("cancelled", "Scanning is off or this page has changed.");
       }
+      // A stale BEGIN must not cancel the current document's run.
+      cancelTab(tabId);
       const status = sanitizeStatus({ state: "starting" });
-      runs.set(tabId, { runId: message.runId, documentId: sender.documentId, url: sender.url, status });
+      runs.set(tabId, { runId: message.runId, documentId: sender.documentId, url: message.page_url, status });
       updateBadge(tabId, status);
       return { started: true };
     }
     case "ANALYZE": {
       const run = runs.get(tabId);
-      (await authorizeRun(tabId, run, sender, message.runId))();
-      return broker.request("analyze", message.text, { tabId, runId: message.runId });
+      (await authorizeRun(tabId, run, sender, message))();
+      const result = await broker.request("analyze", message.text, { tabId, runId: message.runId });
+      (await authorizeRun(tabId, run, sender, message))();
+      return result;
     }
     case "PAGE_PROGRESS": {
       const run = runs.get(tabId);
-      (await authorizeRun(tabId, run, sender, message.runId))();
+      (await authorizeRun(tabId, run, sender, message))();
       if (!Number.isSafeInteger(message.status?.sequence) || message.status.sequence < 1) {
         throw new NativeError("invalid_request", "Invalid progress sequence.");
       }
@@ -320,7 +360,7 @@ async function handleContent(message, sender) {
     case "CANCEL_SCAN":
       if (!validRun(message.runId)) throw new NativeError("invalid_request", "Invalid scan.");
       if (runs.get(tabId)?.runId === message.runId) {
-        (await authorizeRun(tabId, runs.get(tabId), sender, message.runId))();
+        (await authorizeRun(tabId, runs.get(tabId), sender, message))();
         cancelTab(tabId);
       }
       return { cancelled: true };

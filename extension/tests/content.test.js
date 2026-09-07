@@ -408,6 +408,25 @@ test("SPA URL changes automatically restart with a fresh page budget", async () 
   assert.equal((await h.send({ type: "PAGE_STATUS" })).usedWords, 82);
 });
 
+test("every scanner request carries the live URL, including SPA and hash changes", async () => {
+  const h = await harness({ auto: true });
+  await h.finish();
+  assert.ok(h.requests.every(message => message.page_url === "https://example.com/article"));
+  for (const url of ["https://example.com/next?words=50", "https://example.com/next?words=50#/route"]) {
+    const before = h.requests.length;
+    h.context.location.href = url;
+    h.navigationEvents.get("currententrychange")();
+    await h.flushTimers();
+    await h.finish();
+    const requests = h.requests.slice(before);
+    for (const type of ["CANCEL_SCAN", "GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS"]) {
+      assert.ok(requests.some(message => message.type === type), type);
+    }
+    assert.ok(requests.every(message => message.page_url === url
+      && message.scanner_version === 6 && message.protocol_version === 2));
+  }
+});
+
 test("history changes restart exhausted pages without requiring DOM mutations", async () => {
   const h = await harness({ auto: true, budget: 80 });
   await h.finish();
@@ -568,7 +587,7 @@ test("the scanner continues top-to-bottom beyond twelve passages and publishes t
   assert.equal(updates[0].status.state, "scanning");
   assert.equal(updates.at(-1).status.state, "done");
   assert.equal(updates.at(-1).status.marked, 20);
-  assert.ok(updates.every(message => message.scanner_version === 5));
+  assert.ok(updates.every(message => message.scanner_version === 6));
   assert.ok(!JSON.stringify(updates).includes(h.blocks[0].text));
 });
 

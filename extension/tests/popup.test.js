@@ -118,7 +118,7 @@ test("popup reports marked counts with no hiding or reveal controls", async () =
   assert.doesNotMatch(html, /marks high-scoring prose red|possible AI involvement|not specific AI-authored words|≥0.982423|not guaranteed/);
 });
 
-test("On requests both optional grants directly in the gesture, before worker messages", async () => {
+test("On confirms both host grants directly in the gesture, before worker messages", async () => {
   const h = await harness();
   h.calls.length = 0;
   h.toggle(true);
@@ -128,6 +128,13 @@ test("On requests both optional grants directly in the gesture, before worker me
   assert.equal(h.calls[1].enabled, true);
   assert.equal(h.elements.get("enabled").checked, true);
   assert.equal(h.elements.get("toggle-label").textContent, "On");
+});
+
+test("popup displays default-On from the worker without requesting access or changing preferences", async () => {
+  const h = await harness({ enabled: true });
+  assert.equal(h.elements.get("enabled").checked, true);
+  assert.equal(h.elements.get("toggle-label").textContent, "On");
+  assert.equal(h.calls.some(call => call.permission || call.type === "SET_ENABLED"), false);
 });
 
 test("declined access stays Off and preserves a concise error across polling", async () => {

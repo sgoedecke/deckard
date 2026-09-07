@@ -36,7 +36,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(root, "models/packed.safetensors"), "fixture");
   fs.writeFileSync(path.join(root, "models/tokenizer.json"), "fixture");
   fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({
-    format: 1, product: "Deckard", version: "0.4.0", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
+    format: 1, product: "Deckard", version: "0.4.1", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
     flag_threshold: C.FLAG_THRESHOLD, experimental: true, extension_id: "a".repeat(32),
     weights_sha256: hash("fixture"), tokenizer_sha256: hash("fixture"),
   }));

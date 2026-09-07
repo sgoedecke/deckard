@@ -100,6 +100,9 @@ struct Removal {
     std::set<fs::path> directories;
 };
 Removal validate_release(const fs::path& release);
+bool owned_release_version(const Json& version) {
+    return version == app_version || version == "0.4.0";
+}
 fs::path installation_prefix() {
     auto distribution = executable_path().parent_path().parent_path();
     if (distribution.parent_path().filename() == "releases" && fs::is_regular_file(distribution / "install.json"))
@@ -290,7 +293,7 @@ void install(const Options& options) {
         std::cout << "Registered for extension " << id << ".\n";
     if (!extension.empty())
         std::cout << "In Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked,\n"
-                  << "and select " << prefix / "extension" << ". Then toggle Deckard On.\n"
+                  << "and select " << prefix / "extension" << ". New installations start On; saved Off settings are preserved.\n"
                   << "After an upgrade, click Reload on the existing Deckard extension.\n";
     if (shell != "none") std::cout << "Open a new terminal to use deckard on PATH.\n";
     std::cout << "Chrome starts the stdio host on demand; deckard start is not a daemon.\n";
@@ -316,7 +319,7 @@ Removal validate_release(const fs::path& release) {
         uninstall_conflict("Release ownership metadata is missing or redirected: " + release.string() + ".");
     auto config = read_json(metadata);
     if (!config.is_object() || config.value("format", Json()) != 1 ||
-        config.value("product", Json()) != "Deckard" || config.value("version", Json()) != app_version ||
+        config.value("product", Json()) != "Deckard" || !owned_release_version(config.value("version", Json())) ||
         config.value("model", Json()) != model_id || config.value("revision", Json()) != revision ||
         config.value("policy", Json()) != policy_id || config.value("flag_threshold", Json()) != flag_threshold ||
         config.value("experimental", Json()) != true ||
@@ -418,15 +421,15 @@ void uninstall(const Options& options) {
                 (*setup)["release_cleanup"].is_object() && (*setup)["release_cleanup"].contains(name)) {
                 auto owned = (*setup)["release_cleanup"][name];
                 if (!owned.is_object() || owned.value("product", Json()) != "Deckard" ||
-                    owned.value("version", Json()) != app_version ||
+                    !owned_release_version(owned.value("version", Json())) ||
                     !owned.value("metadata_sha256", Json()).is_string() ||
                     owned["metadata_sha256"].get<std::string>().size() != 64 ||
-                    name != std::string(app_version) + "-" + owned["metadata_sha256"].get<std::string>().substr(0, 20) ||
+                    name != owned["version"].get<std::string>() + "-" + owned["metadata_sha256"].get<std::string>().substr(0, 20) ||
                     !fs::is_empty(entry.path()))
                     uninstall_conflict("Interrupted release cleanup does not match its saved ownership record.");
                 removals.push_back({entry.path(), {}, {}});
             } else if ((entry.is_directory() && present(entry.path() / "install.json")) ||
-                name.rfind("0.4.0-", 0) == 0)
+                name.rfind("0.4.0-", 0) == 0 || name.rfind(std::string(app_version) + "-", 0) == 0)
                 removals.push_back(validate_release(entry.path()));
             else std::cout << "Retaining unrecognized release entry: " << entry.path() << '\n';
         }
@@ -467,10 +470,12 @@ void uninstall(const Options& options) {
         {"profile_created", false}, {"extension_files", Json::object()}, {"uninstalling", true}};
     if (!setup->contains("release_cleanup")) (*setup)["release_cleanup"] = Json::object();
     for (const auto& removal : removals)
-        if (present(removal.release / "install.json"))
+        if (present(removal.release / "install.json")) {
+            const auto config = read_json(removal.release / "install.json");
             (*setup)["release_cleanup"][removal.release.filename().string()] =
-                Json{{"product", "Deckard"}, {"version", app_version},
-                     {"metadata_sha256", text_sha256(read_json(removal.release / "install.json").dump())}};
+                Json{{"product", "Deckard"}, {"version", config["version"]},
+                     {"metadata_sha256", text_sha256(config.dump())}};
+        }
     write_json(prefix / "setup.json", *setup);
     if (present(registration)) fs::remove(registration);
     if (present(current)) fs::remove(current);
@@ -543,7 +548,7 @@ void verify(const Options& options) {
 }
 void help() {
     std::cout <<
-        "Deckard 0.4.0 - native Gradient/MLX for Apple Silicon macOS15+\n\n"
+        "Deckard 0.4.1 - native Gradient/MLX for Apple Silicon macOS15+\n\n"
         "deckard install [--extension-id ID] [--replace] [--model-dir DIR]\n"
         "                [--home DIR] [--manifest-dir DIR] [--no-register]\n"
         "                [--extension-dir DIR] [--shell zsh|bash|none] [--no-extension]\n"

@@ -20,7 +20,7 @@ test("real release archive installs, upgrades, uninstalls and reinstalls through
     const profile = path.join(user, ".zshrc");
     const original = "# unrelated settings\nexport PERSONAL_TEST_SETTING=preserved";
     fs.writeFileSync(profile, original);
-    const archiveName = "deckard-v0.4.0-macos-arm64.tar.gz";
+    const archiveName = "deckard-v0.4.1-macos-arm64.tar.gz";
     const archive = path.resolve(release, archiveName);
     const script = fs.readFileSync(path.join(release, "install.sh"), "utf8");
     const curlLog = path.join(scratch, "curl.log");
@@ -35,7 +35,7 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-[ "$url" = "https://github.com/sgoedecke/deckard/releases/download/v0.4.0/${archiveName}" ]
+[ "$url" = "https://github.com/sgoedecke/deckard/releases/download/v0.4.1/${archiveName}" ]
 [ -n "$output" ]
 printf '%s\\n' "$url" >> "$CURL_LOG"
 cp "$RELEASE_ARCHIVE" "$output"
@@ -66,7 +66,7 @@ cp "$RELEASE_ARCHIVE" "$output"
     const firstProfile = fs.readFileSync(profile, "utf8");
     const extension = JSON.parse(fs.readFileSync(path.join(prefix, "extension/manifest.json")));
     assert.equal(extension.name, "Deckard");
-    assert.equal(extension.version, "0.4.0");
+    assert.equal(extension.version, "0.4.1");
     assert.deepEqual(JSON.parse(fs.readFileSync(registration)).allowed_origins,
       ["chrome-extension://bkihjdkalohbkgnjjoobababhipefjdg/"]);
     const status = run(binary, ["status"]);

@@ -4,6 +4,13 @@ Experimental, local AI-text detection for Chrome. Deckard colors high-scoring
 passages red; it never hides or rewrites them. The crossed-eye toolbar button
 opens an On/Off switch, threshold slider, and links to flagged passages.
 
+**Website access in v0.4.1:** Deckard declares required access to HTTP and HTTPS
+websites, which Chrome grants or prompts for when the extension is installed.
+Fresh installs start **On** only when that access is available; an explicitly
+saved **Off** stays Off across upgrades and restarts. Browser restrictions or
+revoked access stop scanning. While On, eligible pages are analyzed automatically
+and locally; use the toolbar switch to turn Off and remove marks.
+
 ## Getting started
 
 Install [Deckard v0.4.0](https://github.com/sgoedecke/deckard/releases/tag/v0.4.0)
@@ -24,8 +31,10 @@ Chrome still requires this **manual** step:
 2. Choose **Load unpacked** and select
    `~/Library/Application Support/Deckard/extension` (use Command-Shift-G in
    the folder picker). Keep this stable installed folder in place.
-3. Pin Deckard if desired, open a normal HTTP(S) page, and turn Deckard **On**.
-   Grant the requested website access. Deckard starts Off by default.
+3. Pin Deckard if desired and open a normal HTTP(S) page. In v0.4.1, new installs
+   start **On** with website access. If you previously saved **Off**, or are using
+   the v0.4.0 installer above, turn Deckard **On** and approve website access if
+   Chrome requests it.
 
 Requirements: **Apple Silicon (arm64), macOS 15 or later, and Google Chrome
 121 or later**. Intel Macs, other operating systems and other browsers are

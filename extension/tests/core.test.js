@@ -4,7 +4,7 @@ import "../core.js";
 import { modelIdentity } from "./model-fixture.js";
 const C = globalThis.DeckardCore;
 
-test("settings are opt-in, sanitized and contain no text or browsing history", () => {
+test("runtime settings stay fail-closed; first-install defaults belong to worker initialization", () => {
   const defaults = { enabled: false, flagThreshold: C.FLAG_THRESHOLD };
   assert.deepEqual(C.normalizeSettings(), defaults);
   assert.deepEqual(C.normalizeSettings({ threshold: NaN, hideEnabled: "yes", text: "private",
@@ -15,7 +15,7 @@ test("settings are opt-in, sanitized and contain no text or browsing history", (
   assert.deepEqual(C.normalizeSettings(null), C.normalizeSettings());
 });
 
-test("HTTP(S) only and broad optional host permissions", () => {
+test("HTTP(S) only and broad host permissions", () => {
   assert.equal(C.originOf("https://example.com:8443/a?b=c"), "https://example.com:8443");
   assert.deepEqual(C.HOST_PERMISSIONS, ["http://*/*", "https://*/*"]);
   for (const input of ["chrome://settings", "file:///a", "about:blank", "data:text/plain,hi", "bad"]) {
@@ -31,7 +31,7 @@ test("word/Unicode counting and English page gate", () => {
   }
 });
 
-test("red marking requires opt-in and complete coverage with a chunk above the fixed threshold", () => {
+test("red marking requires enabled scanning and complete coverage with a chunk above the fixed threshold", () => {
   const result = { ...modelIdentity, status: "complete", min_score: 0.91, max_score: 0.99, score: 0.95, truncated: false,
     chunks: [{ words: 80 }] };
   const settings = { enabled: true };

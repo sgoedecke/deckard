@@ -34,7 +34,7 @@
   const view = window;
   function request(message) {
     return chrome.runtime.sendMessage({ ...message, protocol_version: C.PROTOCOL_VERSION,
-      scanner_version: C.SCANNER_VERSION }).then(response => {
+      scanner_version: C.SCANNER_VERSION, page_url: location.href }).then(response => {
       if (!response?.ok) {
         const error = new Error(response?.error?.message || "Extension unavailable. Reload the page.");
         error.code = response?.error?.code || "extension_error";

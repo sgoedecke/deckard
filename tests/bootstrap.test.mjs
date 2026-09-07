@@ -91,7 +91,7 @@ test('curl-piped installer forwards spaces and options to native, which owns set
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.native, /^install\n--home\nan isolated home\n--manifest-dir\nmanifest with spaces\n--extension-id\nabcdefghijklmnopabcdefghijklmnop\n--model-dir\n.*\/bundle\/models\n--extension-dir\n.*\/bundle\/extension\n--shell\nbash\n$/);
   assert.match(result.curl, /--proto\n=https\n--proto-redir\n=https\n/);
-  assert.match(result.curl, /https:\/\/github\.com\/sgoedecke\/deckard\/releases\/download\/v0\.4\.0\/deckard-v0\.4\.0-macos-arm64\.tar\.gz/);
+  assert.match(result.curl, /https:\/\/github\.com\/sgoedecke\/deckard\/releases\/download\/v0\.4\.1\/deckard-v0\.4\.1-macos-arm64\.tar\.gz/);
   assert.ok(!result.files.some(file => file.startsWith('.deckard-bootstrap.')));
 });
 
@@ -140,7 +140,7 @@ test('no controlling terminal fails clearly without --yes', async () => {
 test('pipe prompts read from controlling tty, never script stdin', { skip: process.platform !== 'darwin' }, async () => {
   const result = await invoke(['--shell', 'none'], { tty: true });
   assert.equal(result.error, undefined);
-  assert.match(result.stdout, /Install Deckard v0\.4\.0/);
+  assert.match(result.stdout, /Install Deckard v0\.4\.1/);
   assert.match(result.native ?? '', /^install\n/);
 });
 

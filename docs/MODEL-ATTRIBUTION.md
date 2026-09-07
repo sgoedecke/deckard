@@ -1,4 +1,4 @@
-# Deckard 0.4.0 model attribution
+# Deckard 0.4.1 model attribution
 
 Deckard uses **Gradient — AI-Generated Text Detector**, published by
 **ShantanuT01 (Shantanu Thorat)**:

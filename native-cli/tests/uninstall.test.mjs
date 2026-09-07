@@ -12,12 +12,13 @@ const write = (file, contents = "owned") => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
 };
-function fixture(t, version = "0.4.0") {
+function fixture(t, version = "0.4.1") {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".uninstall-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "application with spaces");
   const manifests = path.join(root, "native manifests");
-  const hostName = version === "0.4.0" ? host : "com.example.other";
+  const owned = ["0.4.0", "0.4.1"].includes(version);
+  const hostName = owned ? host : "com.example.other";
   const registration = path.join(manifests, `${hostName}.json`);
   const userHome = path.join(root, "user");
   fs.mkdirSync(userHome);
@@ -34,8 +35,8 @@ function fixture(t, version = "0.4.0") {
     license_files: ["share/licenses/MLX-LICENSE"],
   };
   const licenses = config.license_files;
-  if (version !== "0.4.0") delete config.product;
-  const cli = version === "0.4.0" ? "deckard" : "other-app";
+  if (!owned) delete config.product;
+  const cli = owned ? "deckard" : "other-app";
   const sorted = JSON.stringify(Object.fromEntries(Object.keys(config).sort().map(key => [key, config[key]])));
   const name = `${config.version}-${createHash("sha256").update(sorted).digest("hex").slice(0, 20)}`;
   const release = path.join(home, "releases", name);
@@ -62,6 +63,15 @@ test("absent uninstall is idempotent and creates no directories", t => {
     assert.ok(!fs.existsSync(f.home));
     assert.ok(!fs.existsSync(f.manifests));
   }
+});
+
+test("uninstall still recognizes positively owned Deckard 0.4.0 releases", t => {
+  const f = fixture(t, "0.4.0");
+  f.install();
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!fs.existsSync(f.release));
+  assert.ok(!fs.existsSync(f.registration));
 });
 
 test("uninstall removes owned files only and retains the lock inode", t => {

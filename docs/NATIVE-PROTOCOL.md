@@ -1,4 +1,4 @@
-# Deckard 0.4.0 native messaging protocol v2 (Gradient)
+# Deckard 0.4.1 native messaging protocol v2 (Gradient)
 
 Implemented by `native-cli/`; release users need no Python runtime.
 
@@ -12,6 +12,31 @@ The implementation limits each frame to 128 KiB, tighter than Chrome's limits.
 It accepts only the documented fields. Malformed frames produce an error and
 close the host; well-framed invalid requests produce an error reply.
 EOF on stdin releases the process and its model/cache.
+
+## Extension page authorization
+
+Deckard v0.4.1 declares required HTTP/HTTPS host permissions. A missing saved
+`enabled` preference defaults On only after Chrome confirms both grants;
+explicit Off and malformed saved values remain Off. Runtime settings
+normalization itself remains fail-closed. Revocation immediately disables
+scanning and persists Off; neither upgrades nor restarts override saved Off.
+
+The content-script/worker scanner contract is version **6**, independently of
+native protocol v2. Every content request includes `scanner_version: 6`,
+`protocol_version: 2`, and `page_url` captured from the isolated content script's
+live `location.href`. Chrome's `MessageSender.url` can remain the original
+document URL after same-document SPA navigation; it is used for the same-origin
+check, not as the current page URL.
+
+Before accepting an enabled configuration request, starting a run, or authorizing
+run operations/replies, the worker checks the current non-private HTTP(S) tab
+and probes its top frame with `scripting.executeScript` in the isolated world.
+Chrome's returned frame ID and document ID and the probed URL must match the
+sender/run and requested URL; the tab URL is rechecked after the probe. A stale
+request cannot replace a newer run. Off, permission revocation, and navigation
+invalidate pending authorizations. No additional permissions are required.
+Old content scripts must reload; the native protocol, model identity, 50-word
+minimum, and default threshold are unchanged by this scanner contract change.
 
 ## Requests
 

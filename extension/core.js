@@ -1,10 +1,10 @@
 (() => {
   "use strict";
-  if (globalThis.DeckardCore?.SCANNER_VERSION === 5) return;
+  if (globalThis.DeckardCore?.SCANNER_VERSION === 6) return;
   const MAX_CHARS = 20000;
   const MIN_WORDS = 50;
   const MAX_PAGE_WORDS = 25000;
-  const SCANNER_VERSION = 5;
+  const SCANNER_VERSION = 6;
   const MAX_DOM_NODES = 50000;
   const MAX_PAGE_CHARS = 500000;
   const TARGET_WORDS = 300;

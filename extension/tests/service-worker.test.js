@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { NativeQueue, NativeError } from "../native-queue.js";
+import { modelIdentity } from "./model-fixture.js";
 
 const coreSource = fs.readFileSync(new URL("../core.js", import.meta.url), "utf8");
 const workerSource = fs.readFileSync(new URL("../service-worker.js", import.meta.url), "utf8")
@@ -18,10 +19,13 @@ async function harness(initial = {}, options = {}) {
   const granted = new Set(options.grants || (initial.enabled ? origins : []));
   const tabs = new Map((options.tabs || [{ id: 1, url: "https://example.com/article", incognito: false }])
     .map(tab => [tab.id, tab]));
+  const documents = new Map([...tabs.values()].map(tab => [tab.id,
+    { documentId: `document-${tab.id}`, frameId: 0, url: tab.url }]));
   const scripts = new Map();
   const messages = [];
   const ports = [];
   const injections = [];
+  const probes = [];
   const badges = new Map();
   const actionCalls = [];
   const action = Object.fromEntries(["setBadgeText", "setBadgeBackgroundColor", "setTitle"].map(method =>
@@ -56,7 +60,15 @@ async function harness(initial = {}, options = {}) {
       getRegisteredContentScripts: async () => [...scripts.values()],
       unregisterContentScripts: async ({ ids }) => ids.forEach(id => scripts.delete(id)),
       registerContentScripts: async entries => entries.forEach(script => scripts.set(script.id, script)),
-      executeScript: async entry => { injections.push(entry); return []; },
+      executeScript: async entry => {
+        if (entry.files) { injections.push(entry); return []; }
+        probes.push(entry);
+        assert.equal(entry.world, "ISOLATED");
+        assert.deepEqual(Array.from(entry.target.frameIds), [0]);
+        const document = documents.get(entry.target.tabId);
+        return document ? [{ documentId: document.documentId, frameId: document.frameId,
+          result: vm.runInNewContext(`(${entry.func.toString()})()`, { location: { href: document.url } }) }] : [];
+      },
     },
     tabs: {
       query: async () => [...tabs.values()],
@@ -77,19 +89,21 @@ async function harness(initial = {}, options = {}) {
   const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
   await settle();
   const popup = { id: "test-id", url: "chrome-extension://test-id/popup.html" };
-  const content = { id: "test-id", tab: tabs.get(1), frameId: 0, documentId: "document-1",
+  const content = { id: "test-id", tab: tabs.get(1), frameId: 0, documentId: "document-1", documentLifecycle: "active",
     url: "https://example.com/article" };
   let progressSequence = 0;
   const send = (message, sender = popup) => new Promise(resolve =>
-    events.message.listeners[0]({ protocol_version: 2, scanner_version: 5, ...message,
+    events.message.listeners[0]({ protocol_version: 2, scanner_version: 6, page_url: sender.url, ...message,
       ...(message.type === "PAGE_PROGRESS" ? { status: { sequence: ++progressSequence, ...message.status } } : {}),
     }, sender, resolve));
-  return { chrome, events, stored, granted, tabs, scripts, messages, ports, injections, send, popup, content, settle, badges, actionCalls };
+  return { chrome, events, stored, granted, tabs, documents, scripts, messages, ports, injections, probes,
+    send, popup, content, settle, badges, actionCalls };
 }
 
-test("manifest keeps host access optional and worker startup does not contact helper", async () => {
+test("manifest declares required host access but denied access keeps startup Off without contacting helper", async () => {
   const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)));
-  assert.equal(manifest.host_permissions, undefined);
+  assert.deepEqual(manifest.host_permissions, origins);
+  assert.equal(manifest.optional_host_permissions, undefined);
   assert.deepEqual(manifest.permissions, ["scripting", "storage", "nativeMessaging"]);
   assert.equal(manifest.incognito, "not_allowed");
   const h = await harness();
@@ -100,11 +114,40 @@ test("manifest keeps host access optional and worker startup does not contact he
   assert.equal(h.injections.length, 0);
 });
 
+test("fresh installs default On only with both host grants and persist the preference", async () => {
+  for (const initialRead of [{}, { deckardSettings: {} }]) {
+    const h = await harness({}, { initialRead, grants: origins });
+    assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, true);
+    assert.equal((await h.send({ type: "GET_CONFIG" }, h.content)).result.enabled, true);
+    assert.equal(h.stored.deckardSettings.enabled, true);
+    assert.equal(h.scripts.size, 1);
+    assert.equal(h.injections.length, 1);
+    assert.equal(h.ports.length, 0, "startup alone does not contact the native helper");
+  }
+  for (const grants of [[], [origins[0]], [origins[1]]]) {
+    const h = await harness({}, { grants });
+    assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
+    assert.equal(h.stored.deckardSettings.enabled, false);
+    assert.equal(h.injections.length, 0);
+    assert.equal(h.ports.length, 0);
+  }
+});
+
+test("saved Off and invalid enabled values never become On during upgrade or restart", async () => {
+  for (const enabled of [false, null, "true", 1]) {
+    const h = await harness({ enabled }, { grants: origins });
+    assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
+    assert.equal(h.stored.deckardSettings.enabled, false);
+    assert.equal(h.injections.length, 0);
+    assert.equal(h.ports.length, 0);
+  }
+});
+
 test("Deckard uses its own storage keys and leaves unrelated legacy settings untouched", async () => {
   const legacy = { settings: { enabled: true }, flagThreshold: 0.7 };
   const h = await harness({}, { initialRead: legacy, grants: origins });
   Object.assign(h.stored, legacy);
-  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
+  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, true);
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.9824231167326641);
   await h.send({ type: "SET_ENABLED", enabled: true });
   await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.85 });
@@ -209,26 +252,187 @@ test("SPA URL notifications cancel the old run and wake the existing content scr
   await h.send({ type: "BEGIN_SCAN", runId: "old-run" }, h.content);
   const destination = "https://example.com/next";
   h.tabs.get(1).url = destination;
+  h.documents.get(1).url = destination;
   h.events.updated.fire(1, { url: destination }, h.tabs.get(1));
   await h.settle();
   const notice = h.messages.find(entry => entry.message.type === "NAVIGATED");
   assert.equal(notice.message.url, destination);
   assert.equal(notice.message.cancelledRunId, "old-run");
-  const content = { ...h.content, url: destination };
-  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "new-run" }, content)).ok, true);
-  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "new-run", status: progress() }, content)).ok, true);
+  assert.equal((await h.send({ type: "GET_CONFIG", page_url: destination }, h.content)).ok, true);
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "new-run", page_url: destination }, h.content)).ok, true);
+  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "new-run", page_url: destination,
+    status: progress() }, h.content)).ok, true);
+  assert.equal((await h.send({ type: "STATUS", tabId: 1 })).ok, true);
 });
 
 test("late tab URL notifications preserve an already authorized destination run", async () => {
   const h = await harness({ enabled: true });
   const destination = "https://example.com/next";
   h.tabs.get(1).url = destination;
-  const content = { ...h.content, url: destination };
-  await h.send({ type: "BEGIN_SCAN", runId: "destination-run" }, content);
+  h.documents.get(1).url = destination;
+  await h.send({ type: "BEGIN_SCAN", runId: "destination-run", page_url: destination }, h.content);
   h.events.updated.fire(1, { status: "loading", url: destination }, h.tabs.get(1));
   await h.settle();
-  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "destination-run", status: progress() }, content)).ok, true);
+  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "destination-run", page_url: destination,
+    status: progress() }, h.content)).ok, true);
   assert.equal(h.messages.some(entry => entry.message.type === "NAVIGATED"), false);
+});
+
+test("the original Chrome sender URL authorizes live SPA analysis, progress, focus and cancellation", async () => {
+  const h = await harness({ enabled: true }, { flagThreshold: 0.85 });
+  const originalURL = h.content.url;
+  for (const page_url of ["https://example.com/page-1?words=50", "https://example.com/page-1?words=50#/next"]) {
+    h.tabs.get(1).url = page_url;
+    h.documents.get(1).url = page_url;
+    assert.equal(h.content.url, originalURL, "Chrome keeps the original MessageSender.url");
+    const config = await h.send({ type: "GET_CONFIG", page_url }, h.content);
+    assert.equal(config.result.flagThreshold, 0.85);
+    assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "spa", page_url }, h.content)).ok, true);
+    const pending = h.send({ type: "ANALYZE", runId: "spa", page_url, text: "word ".repeat(50) }, h.content);
+    await h.settle();
+    const port = h.ports.at(-1);
+    assert.equal(port.sent.at(-1).page_url, undefined, "URLs never enter the native protocol");
+    port.onMessage.fire({ id: port.sent.at(-1).id, ok: true, result: {
+      ...modelIdentity, status: "complete", score: 0.99, min_score: 0.99, max_score: 0.99,
+      chunks: [{ index: 0, score: 0.99, tokens: 50, words: 50 }], words: 50,
+      total_tokens: 50, analyzed_tokens: 50, truncated: false, cached: false,
+    } });
+    assert.equal((await pending).ok, true);
+    assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "spa", page_url,
+      status: progress({ marked: 1, findings: [{ id: findingId, words: 50 }] }) }, h.content)).ok, true);
+    h.chrome.tabs.sendMessage = async () => ({ focused: true });
+    assert.equal((await h.send({ type: "FOCUS_FINDING", tabId: 1, findingId })).result.focused, true);
+    assert.equal((await h.send({ type: "CANCEL_SCAN", runId: "spa", page_url }, h.content)).result.cancelled, true);
+    assert.equal((await h.send({ type: "ANALYZE", runId: "spa", page_url, text: "old" }, h.content)).ok, false);
+  }
+});
+
+test("missing, malformed, cross-origin and old-page URLs cannot replace or use a live run", async () => {
+  const h = await harness({ enabled: true });
+  const page_url = "https://example.com/next";
+  h.tabs.get(1).url = page_url;
+  h.documents.get(1).url = page_url;
+  await h.send({ type: "BEGIN_SCAN", runId: "current", page_url }, h.content);
+  for (const url of [undefined, null, {}, "", "chrome://settings", "https://other.example/next", h.content.url]) {
+    for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
+      const response = await h.send({ type, runId: "current", page_url: url,
+        text: "private", status: progress() }, h.content);
+      assert.equal(response.ok, false, `${type}: ${String(url)}`);
+    }
+  }
+  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "current", page_url,
+    status: progress() }, h.content)).ok, true, "invalid BEGIN and CANCEL leave the live run intact");
+  assert.equal(h.ports.length, 0);
+});
+
+test("same-URL replacement documents reject old senders even before tab navigation events arrive", async () => {
+  const h = await harness({ enabled: true });
+  await h.send({ type: "BEGIN_SCAN", runId: "old" }, h.content);
+  h.documents.get(1).documentId = "document-new";
+  for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
+    assert.equal((await h.send({ type, runId: "old", text: "private", status: progress() },
+      h.content)).error.code, "cancelled", type);
+  }
+  assert.equal((await h.send({ type: "STATUS", tabId: 1 })).ok, false);
+  const current = { ...h.content, documentId: "document-new" };
+  assert.equal((await h.send({ type: "GET_CONFIG" }, current)).ok, true);
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "new" }, current)).ok, true);
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "late-old" }, h.content)).ok, false);
+  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "new", status: progress() }, current)).ok, true);
+  assert.equal(h.ports.length, 0);
+});
+
+test("a claimed live cross-origin URL cannot reuse the original document sender", async () => {
+  const h = await harness({ enabled: true });
+  const page_url = "https://other.example/article";
+  h.tabs.get(1).url = page_url;
+  h.documents.set(1, { documentId: "document-new", frameId: 0, url: page_url });
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "spoof", page_url }, h.content)).error.code, "cancelled");
+  const current = { ...h.content, url: page_url, documentId: "document-new" };
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "new", page_url }, current)).ok, true);
+});
+
+test("authoritative probes reject wrong frames, documents, URLs, empty results and injection errors", async () => {
+  for (const kind of ["frame", "document", "url", "empty", "error", "private"]) {
+    const h = await harness({ enabled: true });
+    if (kind === "frame") h.documents.get(1).frameId = 1;
+    if (kind === "document") h.documents.get(1).documentId = "cached-document";
+    if (kind === "url") h.documents.get(1).url = "https://example.com/not-the-tab";
+    if (kind === "empty") h.documents.delete(1);
+    if (kind === "private") h.tabs.get(1).incognito = true;
+    if (kind === "error") h.chrome.scripting.executeScript = async () => { throw new Error("Cannot access frame"); };
+    assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "bad" }, h.content)).ok, false, kind);
+    assert.equal(h.ports.length, 0);
+  }
+});
+
+test("Off, permission revocation and navigation win pending document probes", async () => {
+  for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
+    for (const kind of ["off", "permission", "navigation"]) {
+      const h = await harness({ enabled: true });
+      await h.send({ type: "BEGIN_SCAN", runId: "run" }, h.content);
+      const execute = h.chrome.scripting.executeScript;
+      let release;
+      h.chrome.scripting.executeScript = async entry => {
+        const result = await execute(entry);
+        return new Promise(resolve => { release = () => resolve(result); });
+      };
+      const pending = h.send({ type, runId: "run", text: "private", status: progress() }, h.content);
+      await h.settle();
+      if (kind === "off") await h.send({ type: "SET_ENABLED", enabled: false });
+      if (kind === "permission") { h.granted.clear(); h.events.permissions.fire({ origins }); }
+      if (kind === "navigation") h.events.updated.fire(1, { status: "loading" });
+      release();
+      assert.equal((await pending).error.code, "cancelled", `${type}: ${kind}`);
+      assert.equal(h.ports.length, 0);
+    }
+  }
+});
+
+test("a delayed BEGIN probe cannot cancel a newer authorized run", async () => {
+  const h = await harness({ enabled: true });
+  const execute = h.chrome.scripting.executeScript;
+  let release;
+  h.chrome.scripting.executeScript = async entry => {
+    const result = await execute(entry);
+    return new Promise(resolve => { release = () => resolve(result); });
+  };
+  const old = h.send({ type: "BEGIN_SCAN", runId: "old" }, h.content);
+  await h.settle();
+  h.chrome.scripting.executeScript = execute;
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "new" }, h.content)).ok, true);
+  release();
+  assert.equal((await old).error.code, "cancelled");
+  assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "new", status: progress() }, h.content)).ok, true);
+});
+
+test("the tab URL is checked again after a document probe completes", async () => {
+  const h = await harness({ enabled: true });
+  const execute = h.chrome.scripting.executeScript;
+  h.chrome.scripting.executeScript = async entry => {
+    const result = await execute(entry);
+    h.tabs.get(1).url = "https://example.com/next";
+    return result;
+  };
+  assert.equal((await h.send({ type: "BEGIN_SCAN", runId: "old" }, h.content)).error.code, "cancelled");
+  assert.equal(h.ports.length, 0);
+});
+
+test("native replies recheck live URL and document without relying on navigation notifications", async () => {
+  for (const kind of ["url", "document"]) {
+    const h = await harness({ enabled: true });
+    await h.send({ type: "BEGIN_SCAN", runId: "run" }, h.content);
+    const pending = h.send({ type: "ANALYZE", runId: "run", text: "short" }, h.content);
+    await h.settle();
+    if (kind === "url") {
+      h.tabs.get(1).url = "https://example.com/next";
+      h.documents.get(1).url = h.tabs.get(1).url;
+    } else h.documents.get(1).documentId = "new-document";
+    const port = h.ports[0];
+    port.onMessage.fire({ id: port.sent[0].id, ok: true,
+      result: { ...modelIdentity, status: "skipped", reason: "too_short", words: 1 } });
+    assert.equal((await pending).error.code, "cancelled", kind);
+  }
 });
 
 test("stale content scripts cannot consume Deckard results with an incompatible policy", async () => {
@@ -241,7 +445,7 @@ test("stale content scripts cannot consume Deckard results with an incompatible 
 test("old or missing scanner versions fail closed for every content request", async () => {
   const h = await harness({ enabled: true });
   await h.send({ type: "BEGIN_SCAN", runId: "current" }, h.content);
-  for (const scanner_version of [undefined, 2, "3", 4]) {
+  for (const scanner_version of [undefined, 2, "3", 4, 5]) {
     for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
       const response = await h.send({ type, runId: "current", scanner_version, text: "private text",
         status: { state: "done" } }, h.content);
@@ -279,7 +483,7 @@ test("global On requires both host grants, registers broad scripts and scans exi
   assert.equal(h.injections.length, 1);
   assert.equal((await h.send({ type: "GET_CONFIG" }, h.content)).result.enabled, true);
   assert.equal((await h.send({ type: "GET_CONFIG" },
-    { ...h.content, url: "https://other.example:8443/article" })).result.enabled, true);
+    { ...h.content, url: "https://other.example:8443/article" })).error.code, "cancelled");
   assert.deepEqual(JSON.parse(JSON.stringify(h.stored)), { deckardSettings: { enabled: true } });
   await h.send({ type: "SET_ENABLED", enabled: false });
   assert.equal(h.scripts.size, 0);
@@ -312,6 +516,7 @@ test("manual/configuration/helper control messages no longer exist", async () =>
 test("global Off cancels all tabs and restores content without exposing page text", async () => {
   const h = await harness({ enabled: true });
   h.tabs.set(2, { id: 2, url: "https://other.example/article", incognito: false });
+  h.documents.set(2, { documentId: "document-2", frameId: 0, url: h.tabs.get(2).url });
   const other = { ...h.content, tab: h.tabs.get(2), url: h.tabs.get(2).url, documentId: "document-2" };
   await h.send({ type: "BEGIN_SCAN", runId: "one" }, h.content);
   await h.send({ type: "BEGIN_SCAN", runId: "two" }, other);
@@ -389,6 +594,17 @@ test("Off wins delayed startup storage read without injecting or loading native 
   assert.equal(h.ports.length, 0);
 });
 
+test("Off wins pending first-install default-On initialization", async () => {
+  let resolve;
+  const h = await harness({}, { grants: origins, initialRead: new Promise(done => { resolve = done; }) });
+  await h.send({ type: "SET_ENABLED", enabled: false });
+  resolve({});
+  await h.settle();
+  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, false);
+  assert.equal(h.stored.deckardSettings.enabled, false);
+  assert.equal(h.injections.length, 0);
+  assert.equal(h.ports.length, 0);
+});
 test("Off during injection never sends START after the injection resolves", async () => {
   const h = await harness();
   origins.forEach(origin => h.granted.add(origin));
