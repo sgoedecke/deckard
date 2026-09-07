@@ -6,10 +6,8 @@ opens an On/Off switch, threshold slider, and links to flagged passages.
 
 ## Getting started
 
-**Version 0.4.0 is the first planned public release. It has not been published
-or verified yet; there is no working release download to install today.**
-
-Once that release is published and verified, the intended installation command is:
+Install [Deckard v0.4.0](https://github.com/sgoedecke/deckard/releases/tag/v0.4.0)
+from your terminal:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.4.0/install.sh | bash
@@ -33,6 +31,7 @@ Requirements: **Apple Silicon (arm64), macOS 15 or later, and Google Chrome
 121 or later**. Intel Macs, other operating systems and other browsers are
 not supported. Model inference uses local memory and CPU/GPU resources;
 initial downloads are large and require an internet connection.
+The release download is approximately 259 MiB and includes the quantized model.
 
 The native release is **ad-hoc signed, not Developer ID signed or notarized**.
 macOS or managed-device policy may block it. After verifying the release and
