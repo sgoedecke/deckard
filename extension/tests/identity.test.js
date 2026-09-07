@@ -23,6 +23,9 @@ test("public manifest key reproducibly pins the stable Chrome extension ID", () 
   assert.match(deriveId(der), /^[a-p]{32}$/);
   assert.equal(deriveId(der), extensionId);
   assert.ok(read("../../README.md").includes(`\`${extensionId}\``));
+  const nativeId = read("../../native-cli/src/support.hpp")
+    .match(/\bdefault_extension_id\s*=\s*"([a-p]{32})"/)?.[1];
+  assert.equal(nativeId, deriveId(der));
 });
 
 test("Deckard brand, release version and native host remain consistent", () => {
