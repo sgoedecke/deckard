@@ -6,11 +6,11 @@ Named after the original AI hunter in _Blade Runner_, Deckard is a Chrome extens
 
 ## Getting started
 
-Install [Deckard v0.4.1](https://github.com/sgoedecke/deckard/releases/tag/v0.4.1)
+Install [Deckard v0.5.0](https://github.com/sgoedecke/deckard/releases/tag/v0.5.0)
 from your terminal:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.4.1/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.5.0/install.sh | bash
 ```
 
 In Chrome:
