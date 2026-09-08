@@ -1,4 +1,4 @@
-# Deckard 0.4.1 native messaging protocol v2 (Gradient)
+# Deckard 0.5.0 native messaging protocol v3 (Gradient)
 
 Implemented by `native-cli/`; release users need no Python runtime.
 
@@ -8,22 +8,22 @@ Each message is UTF-8 JSON preceded by a four-byte
 unsigned length in native byte order. Stdout contains only these frames; stderr
 contains error codes without page text.
 
-The implementation limits each frame to 128 KiB, tighter than Chrome's limits.
+The implementation limits incoming frames to 4 MiB; responses remain below Chrome's 1 MiB limit.
 It accepts only the documented fields. Malformed frames produce an error and
 close the host; well-framed invalid requests produce an error reply.
 EOF on stdin releases the process and its model/cache.
 
 ## Extension page authorization
 
-Deckard v0.4.1 declares required HTTP/HTTPS host permissions. A missing saved
+Deckard declares required HTTP/HTTPS host permissions. A missing saved
 `enabled` preference defaults On only after Chrome confirms both grants;
 explicit Off and malformed saved values remain Off. Runtime settings
 normalization itself remains fail-closed. Revocation immediately disables
 scanning and persists Off; neither upgrades nor restarts override saved Off.
 
-The content-script/worker scanner contract is version **6**, independently of
-native protocol v2. Every content request includes `scanner_version: 6`,
-`protocol_version: 2`, and `page_url` captured from the isolated content script's
+The content-script/worker scanner contract is version **7**, independently of
+native protocol v3. Every content request includes `scanner_version: 7`,
+`protocol_version: 3`, and `page_url` captured from the isolated content script's
 live `location.href`. Chrome's `MessageSender.url` can remain the original
 document URL after same-document SPA navigation; it is used for the same-origin
 check, not as the current page URL.
@@ -35,15 +35,16 @@ Chrome's returned frame ID and document ID and the probed URL must match the
 sender/run and requested URL; the tab URL is rechecked after the probe. A stale
 request cannot replace a newer run. Off, permission revocation, and navigation
 invalidate pending authorizations. No additional permissions are required.
-Old content scripts must reload; the native protocol, model identity, 50-word
-minimum, and default threshold are unchanged by this scanner contract change.
+Old helpers, extensions and content scripts must be updated/reloaded together.
+The model weights and 50-word minimum are unchanged; the two-scale policy defaults
+to 0.97. Existing explicitly saved thresholds remain unchanged.
 
 ## Requests
 
 IDs are nonempty strings up to 128 characters.
 
 ```json
-{"id":"health-1","type":"ping","protocol_version":2}
+{"id":"health-1","type":"ping","protocol_version":3}
 ```
 
 Ping does not load the model. The response reports runtime version, model
@@ -53,7 +54,7 @@ Full asset hashes are checked before the first tokenizer/model load or with
 `deckard status`, not on lightweight ping requests.
 
 ```json
-{"id":"block-1","type":"analyze","protocol_version":2,"text":"A passage of at least 50 words..."}
+{"id":"block-1","type":"analyze","protocol_version":3,"text":"A passage of at least 50 words..."}
 ```
 
 The text is limited to 20,000 Unicode characters. The host counts whitespace-
@@ -63,6 +64,44 @@ have Gradient CLS=1 and SEP=2 added separately; no fixed-length padding is used.
 Missing or incompatible protocol versions fail closed with
 `extension_update_required`.
 
+### Larger-context planning
+
+```json
+{"id":"plan-1","type":"plan","protocol_version":3,"texts":["Ordered eligible prose for one source..."]}
+```
+
+One bounded request plans all current source groups with the same native tokenizer,
+without loading the model. `texts` has 1–500 nonempty strings, at most 500,000
+Unicode characters and 25,000 words in total. Local passage strings are joined
+verbatim with two newlines. Explicit `article`, `role=article`, comment microdata,
+`data-comment-id`, and `.comment` ancestors delimit sources; unmarked authors
+and semantic topic changes cannot reliably be detected.
+
+The planner greedily binary-searches word boundaries for slices near 510 content
+tokens. Slices are verbatim, nonoverlapping and cover the complete supplied text.
+If the final slice cannot be scored completely, the last two are rebalanced at
+the earliest word boundary minimizing token-count imbalance, provided both fit
+510 tokens and meet the native decoded-word minimum. Oversized words remain
+verbatim and may abstain. No whole-document four-window cap is imposed.
+
+The identity-bearing reply has `status: "planned"` and `groups`, one array per
+input, of `{start_word, end_word, tokens, complete}`. Word ordinals are zero-based,
+end-exclusive; clients validate ordered, gap-free coverage before mapping to DOM
+ranges. No UTF-8 byte offsets are treated as JavaScript UTF-16 offsets.
+Planning stops explicitly at 20,000 tokenizer operations or the 60-second deadline.
+
+Local extraction has a cumulative 25,000-word budget per page route. Context
+planning and context inference each have a separate cumulative 25,000-word
+ceiling across revisions; failed/stale work also spends its budget. Mutations can
+replan the current partition only while that ceiling permits. Unchanged plans,
+On/Off and threshold changes reuse page-local results; exact request strings
+already scored by either pass reuse their result. Only current-revision context
+windows are retained. Ordinary anchors do not reset budgets; new SPA routes do.
+Progress counts unique local coverage separately from local/context requests.
+Overlapping flags form one finding; its displayed word count is the largest
+contributing region, not a sum that double-counts words. Context findings apply
+to a region, not independently to each paragraph.
+
 ## Replies
 
 ```json
@@ -70,11 +109,11 @@ Missing or incompatible protocol versions fail closed with
   "id": "block-1",
   "ok": true,
   "result": {
-    "protocol_version": 2,
+    "protocol_version": 3,
     "model": "ShantanuT01/gradient-ai-text-detector",
     "revision": "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
-    "policy": "gradient-q4-composite-v1-retrospective",
-    "flag_threshold": 0.9824231167326641,
+    "policy": "gradient-q4-two-scale-v1",
+    "flag_threshold": 0.97,
     "experimental": true,
     "min_words": 50,
     "status": "complete",
@@ -100,7 +139,7 @@ These numbers illustrate the schema, not a real detection result.
 It is not a calibrated AI-authorship probability. `complete` describes coverage
 of the supplied block, not of the entire webpage. Marking requires complete
 coverage, every chunk at least 50 words, and `max_score` at least the user's
-extension threshold (0.70–0.99, default 0.9824231167326641).
+extension threshold (0.70–0.99, default 0.97).
 `min_score` is diagnostic, not an all-windows marking requirement.
 Text is colored red, never collapsed or hidden.
 
@@ -111,7 +150,7 @@ they are rejected rather than silently skipping 50-74-word passages.
 The native `flag_threshold` identity field remains the fixed reference/default,
 not the user's setting. The extension validates that identity before applying
 its own cutoff; adjusting the slider never changes native requests or weights.
-The default threshold is retrospective and experimental, not an independently validated
+The 97% default is a user-selected experimental cutoff, not a calibrated
 guarantee of at most 1% browsing false positives.
 
 `partial` means the token limit was exceeded or one or more windows were shorter

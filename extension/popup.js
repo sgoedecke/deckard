@@ -76,7 +76,7 @@
     $("status").hidden = !$("status").textContent;
     $("progress").textContent = config.enabled && (status.scannedWords !== undefined || status.analyzed !== undefined)
       ? `${(status.scannedWords || 0).toLocaleString("en-US")}/${(status.totalWords || 0).toLocaleString("en-US")} processed`
-        + ` · ${status.analyzed || 0} scored · ${status.marked || 0} marked · ${status.partial || 0} partial · ${status.skipped || 0} skipped`
+        + ` · ${status.analyzed || 0} local · ${status.contextAnalyzed || 0} context · ${status.marked || 0} marked · ${status.partial || 0} partial · ${status.skipped || 0} skipped`
       : "";
     $("scan-progress").hidden = !config.enabled || !status.totalWords;
     $("scan-progress").max = Math.max(1, status.totalWords || 0);

@@ -101,7 +101,7 @@ struct Removal {
 };
 Removal validate_release(const fs::path& release);
 bool owned_release_version(const Json& version) {
-    return version == app_version || version == "0.4.0";
+    return version == app_version || version == "0.4.0" || version == "0.4.1";
 }
 fs::path installation_prefix() {
     auto distribution = executable_path().parent_path().parent_path();
@@ -321,7 +321,10 @@ Removal validate_release(const fs::path& release) {
     if (!config.is_object() || config.value("format", Json()) != 1 ||
         config.value("product", Json()) != "Deckard" || !owned_release_version(config.value("version", Json())) ||
         config.value("model", Json()) != model_id || config.value("revision", Json()) != revision ||
-        config.value("policy", Json()) != policy_id || config.value("flag_threshold", Json()) != flag_threshold ||
+        config.value("policy", Json()) != (config.value("version", Json()) == app_version
+            ? policy_id : "gradient-q4-composite-v1-retrospective") ||
+        config.value("flag_threshold", Json()) != (config.value("version", Json()) == app_version
+            ? flag_threshold : 0.9824231167326641) ||
         config.value("experimental", Json()) != true ||
         !config.value("extension_id", Json()).is_string() ||
         config.value("source", Json()) != "verified-packed-export")
@@ -429,7 +432,8 @@ void uninstall(const Options& options) {
                     uninstall_conflict("Interrupted release cleanup does not match its saved ownership record.");
                 removals.push_back({entry.path(), {}, {}});
             } else if ((entry.is_directory() && present(entry.path() / "install.json")) ||
-                name.rfind("0.4.0-", 0) == 0 || name.rfind(std::string(app_version) + "-", 0) == 0)
+                name.rfind("0.4.0-", 0) == 0 || name.rfind("0.4.1-", 0) == 0 ||
+                name.rfind(std::string(app_version) + "-", 0) == 0)
                 removals.push_back(validate_release(entry.path()));
             else std::cout << "Retaining unrecognized release entry: " << entry.path() << '\n';
         }
@@ -548,7 +552,7 @@ void verify(const Options& options) {
 }
 void help() {
     std::cout <<
-        "Deckard 0.4.1 - native Gradient/MLX for Apple Silicon macOS15+\n\n"
+        "Deckard 0.5.0 - native Gradient/MLX for Apple Silicon macOS15+\n\n"
         "deckard install [--extension-id ID] [--replace] [--model-dir DIR]\n"
         "                [--home DIR] [--manifest-dir DIR] [--no-register]\n"
         "                [--extension-dir DIR] [--shell zsh|bash|none] [--no-extension]\n"

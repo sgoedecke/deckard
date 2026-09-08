@@ -1,21 +1,22 @@
 (() => {
   "use strict";
-  if (globalThis.DeckardCore?.SCANNER_VERSION === 6) return;
+  if (globalThis.DeckardCore?.SCANNER_VERSION === 7) return;
   const MAX_CHARS = 20000;
   const MIN_WORDS = 50;
   const MAX_PAGE_WORDS = 25000;
-  const SCANNER_VERSION = 6;
+  const SCANNER_VERSION = 7;
   const MAX_DOM_NODES = 50000;
   const MAX_PAGE_CHARS = 500000;
   const TARGET_WORDS = 300;
   const BLOCK_ELEMENTS = "p,li,blockquote,h1,h2,h3,h4,h5,h6,div,section,article";
   const nodeIds = new WeakMap();
   let nextNodeId = 0;
-  const PROTOCOL_VERSION = 2;
+  const PROTOCOL_VERSION = 3;
   const MODEL = "ShantanuT01/gradient-ai-text-detector";
   const MODEL_REVISION = "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f";
-  const POLICY = "gradient-q4-composite-v1-retrospective";
-  const FLAG_THRESHOLD = 0.9824231167326641;
+  const POLICY = "gradient-q4-two-scale-v1";
+  const FLAG_THRESHOLD = 0.97;
+  const SOURCE_BOUNDARY = "article,[role='article'],[itemprop='comment'],[data-comment-id],.comment";
   const HOST_PERMISSIONS = Object.freeze(["http://*/*", "https://*/*"]);
   const EXCLUDED = "nav,header,footer,aside,form,button,input,textarea,select,option,pre,code,script,style,noscript,svg,details:not([open]),[inert],[contenteditable]:not([contenteditable='false']),[role='navigation'],[role='menu'],[role='textbox'],[hidden],[aria-hidden='true'],[data-deckard-owned]";
   function originOf(value) {
@@ -111,6 +112,11 @@
         node: parts[0].node, parts, text, words: wordCount(text) });
     }
     function accept(part) {
+      const source = part.node.closest(SOURCE_BOUNDARY);
+      if (pending.length && pending[0].node.closest(SOURCE_BOUNDARY) !== source) {
+        skipped++;
+        pending = [];
+      }
       if (pending.length && textOf([...pending, part]).length > MAX_CHARS) {
         skipped++;
         limited = true;
@@ -154,7 +160,8 @@
         const text = normalizeText(current.raw.slice(startOffset, endOffset));
         const whole = index === 0 && end === words.length && !current.cut && !limited
           && !current.node.querySelector(`${BLOCK_ELEMENTS},${EXCLUDED}`);
-        accept({ node: current.node, ranges, snapshots, text, whole });
+        accept({ node: current.node, ranges, snapshots, text, whole,
+          sourceWords: words.slice(index, end), segments: current.segments });
         index = end;
       }
     }
@@ -189,7 +196,8 @@
     flush();
     if (pending.length) {
       const previous = blocks.at(-1);
-      if (previous && textOf([...previous.parts, ...pending]).length <= MAX_CHARS) {
+      if (previous && previous.node.closest(SOURCE_BOUNDARY) === pending[0].node.closest(SOURCE_BOUNDARY)
+        && textOf([...previous.parts, ...pending]).length <= MAX_CHARS) {
         blocks.pop();
         emit([...previous.parts, ...pending]);
       } else skipped++;
@@ -205,6 +213,97 @@
         && range.startContainer.nodeType === 3 && range.startContainer.isConnected
         && range.startContainer.nodeValue.slice(range.startOffset, range.endOffset) === part.snapshots[index]
         && isVisible(range.startContainer.parentElement, view, visibility))));
+  }
+  function contextSources(blocks) {
+    const groups = [];
+    for (const block of blocks) {
+      // Explicit articles/comments are hard boundaries. Unmarked authors cannot be inferred.
+      const source = block.node.closest(SOURCE_BOUNDARY);
+      const previous = groups.at(-1);
+      if (previous && previous.source === source) previous.blocks.push(block);
+      else groups.push({ source, blocks: [block] });
+    }
+    return groups.map(group => ({ ...group, text: group.blocks.map(block => block.text).join("\n\n") }));
+  }
+  function contextMatches(text) {
+    return [...text.matchAll(/[^\s\u001c-\u001f\u0085]+/gu)];
+  }
+  function validPlan(result, texts) {
+    if (!validModelIdentity(result) || result.status !== "planned" || !Array.isArray(result.groups)
+      || result.groups.length !== texts.length) return false;
+    return result.groups.every((spans, index) => {
+      if (!Array.isArray(spans) || spans.length > MAX_PAGE_WORDS) return false;
+      const count = contextMatches(texts[index]).length;
+      let end = 0;
+      for (const span of spans) {
+        if (!span || span.start_word !== end || !Number.isSafeInteger(span.end_word)
+          || span.end_word <= end || span.end_word > count || !Number.isSafeInteger(span.tokens)
+          || span.tokens < 1 || typeof span.complete !== "boolean") return false;
+        end = span.end_word;
+      }
+      return end === count;
+    });
+  }
+  function contextBlocks(groups, plan, document) {
+    const texts = groups.map(group => group.text);
+    if (!validPlan(plan, texts)) throw new Error("Invalid native context mapping.");
+    const output = [];
+    for (const [groupIndex, group] of groups.entries()) {
+      const matches = contextMatches(group.text);
+      const boundaries = [0, ...matches.slice(1).map(match => match.index), group.text.length];
+      const parts = [];
+      let cursor = 0;
+      for (const [blockIndex, block] of group.blocks.entries()) {
+        const blockStart = cursor;
+        for (const part of block.parts) {
+          parts.push({ part, start: cursor, end: cursor + part.text.length, blockIndex, blockStart });
+          cursor += part.text.length + 2;
+        }
+      }
+      for (const [index, span] of plan.groups[groupIndex].entries()) {
+        const start = boundaries[span.start_word], end = boundaries[span.end_word];
+        const mapped = [];
+        const firstEntry = parts.find(entry => entry.end > start && entry.start < end);
+        for (const entry of parts) {
+          if (entry.end <= start || entry.start >= end) continue;
+          const part = entry.part;
+          if (start <= entry.start && end >= entry.end) { mapped.push(part); continue; }
+          const words = contextMatches(part.text);
+          const selected = words.map(word => ({ word })).filter(({ word }) =>
+            entry.start + word.index >= start && entry.start + word.index < end);
+          if (!selected.length) continue;
+          const normalizedWords = [...part.text.matchAll(/\S+/gu)];
+          const rawOffset = offset => {
+            const i = normalizedWords.findIndex(word => offset >= word.index && offset <= word.index + word[0].length);
+            if (i < 0 || !part.sourceWords?.[i]) throw new Error("Missing context source offsets.");
+            return part.sourceWords[i].start + offset - normalizedWords[i].index;
+          };
+          const first = rawOffset(selected[0].word.index);
+          const last = rawOffset(selected.at(-1).word.index + selected.at(-1).word[0].length);
+          if (!Array.isArray(part.segments)) throw new Error("Missing context source ranges.");
+          const ranges = [], snapshots = [];
+          for (const segment of part.segments) {
+            if (segment.end <= first || segment.start >= last) continue;
+            const range = document.createRange();
+            range.setStart(segment.node, Math.max(0, first - segment.start));
+            range.setEnd(segment.node, Math.min(segment.end, last) - segment.start);
+            ranges.push(range);
+            snapshots.push(segment.node.nodeValue.slice(range.startOffset, range.endOffset));
+          }
+          mapped.push({ node: part.node, ranges, snapshots, whole: false,
+            text: part.text.slice(selected[0].word.index, selected.at(-1).word.index + selected.at(-1).word[0].length) });
+        }
+        const text = group.text.slice(start, end);
+        if (!mapped.length) throw new Error("Empty context source mapping.");
+        output.push({ key: `context:${group.blocks[0].key}:${index}`, text, words: wordCount(text),
+          node: mapped[0].node, parts: mapped, scale: "context",
+          complete: span.complete && charCount(text) <= MAX_CHARS,
+          index: groups.slice(0, groupIndex).reduce((n, g) => n + g.blocks.length, 0)
+            + firstEntry.blockIndex + Math.max(0, start - firstEntry.blockStart)
+              / (group.blocks[firstEntry.blockIndex].text.length + 2) });
+      }
+    }
+    return output;
   }
   function shouldFlag(result, settings) {
     return settings.enabled && validModelIdentity(result) && result.status === "complete"
@@ -222,6 +321,6 @@
     MAX_CHARS, MIN_WORDS, MAX_PAGE_WORDS, SCANNER_VERSION, FLAG_THRESHOLD, PROTOCOL_VERSION, MODEL, MODEL_REVISION, POLICY,
     validModelIdentity, validThreshold, HOST_PERMISSIONS, EXCLUDED, originOf, pageKey,
     normalizeSettings, wordCount, charCount, englishDocument, isVisible,
-    readText, selectBlocks, groupCurrent, shouldFlag,
+    readText, selectBlocks, groupCurrent, shouldFlag, contextSources, contextBlocks, validPlan,
   });
 })();

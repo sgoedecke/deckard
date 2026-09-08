@@ -35,7 +35,7 @@ test("installation is idempotent, conflict-safe, relocatable, and independent of
   assert.equal(manifest.type, "stdio");
   assert.deepEqual(manifest.allowed_origins, [`chrome-extension://${"a".repeat(32)}/`]);
   assert.ok(fs.statSync(manifest.path).isFile());
-  const message = Buffer.from(JSON.stringify({ id: "launch", type: "ping", protocol_version: 2 }));
+  const message = Buffer.from(JSON.stringify({ id: "launch", type: "ping", protocol_version: 3 }));
   const prefix = Buffer.alloc(4);
   prefix.writeUInt32LE(message.length);
   child = run(manifest.path, manifest.allowed_origins, Buffer.concat([prefix, message]));

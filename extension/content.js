@@ -9,6 +9,13 @@
   const records = new Map();
   const processed = new Map();
   const classOwners = new Map();
+  const rangeOwners = new Map();
+  const contextProcessed = new Map();
+  let contexts = [];
+  let contextSignature = "";
+  let plannedWords = 0;
+  let contextWords = 0;
+  let contextLimited = false;
   let config = C.normalizeSettings();
   let runId = null;
   let authorizedRun = null;
@@ -57,11 +64,26 @@
   }
   function updateStatus(detail) {
     if (detail !== undefined) status.detail = detail;
-    status.marked = records.size;
+    const groups = [];
+    const overlaps = (a, b) => a.parts.some(p => b.parts.some(q => p.node === q.node
+      && (p.whole || q.whole || p.ranges.some(r => q.ranges.some(s =>
+        r.startContainer === s.startContainer && r.startOffset < s.endOffset && s.startOffset < r.endOffset)))));
+    for (const record of [...records.values()].sort((a, b) => a.index - b.index)) {
+      const touching = groups.filter(group => group.some(other => overlaps(record.block, other.block)));
+      const merged = [record, ...touching.flat()];
+      for (const group of touching) groups.splice(groups.indexOf(group), 1);
+      groups.push(merged.sort((a, b) => a.index - b.index));
+    }
+    groups.sort((a, b) => a[0].index - b[0].index);
+    status.marked = groups.length;
+    status.contextWords = contextWords;
     status.usedWords = usedWords;
     status.budgetExhausted = usedWords >= C.MAX_PAGE_WORDS;
-    status.findings = [...records.values()].sort((a, b) => a.index - b.index)
-      .map(record => ({ id: record.id, label: record.label, words: record.block.words }));
+    status.findings = groups.map((group, index) => {
+      const record = group[0], context = group.some(item => item.block.scale === "context");
+      return { id: record.id, label: `${context ? "Context" : "Passage"} ${index + 1}`,
+        context, words: Math.max(...group.map(item => item.block.words)) };
+    });
     if (runId && authorizedRun === runId && !stopped) {
       const id = runId;
       status.sequence = ++progressSequence;
@@ -83,7 +105,11 @@
         const owners = classOwners.get(part.node);
         owners?.delete(key);
         if (!owners?.size) { part.node.classList.remove(flagClass); classOwners.delete(part.node); }
-      } else for (const range of part.ranges) highlights?.delete(range);
+      } else for (const range of part.ranges) {
+        const owners = rangeOwners.get(range);
+        owners?.delete(key);
+        if (!owners?.size) { highlights?.delete(range); rangeOwners.delete(range); }
+      }
     }
     records.delete(key);
   }
@@ -109,7 +135,11 @@
           highlights = new view.Highlight();
           view.CSS.highlights.set(flagClass, highlights);
         }
-        for (const range of part.ranges) highlights.add(range);
+        for (const range of part.ranges) {
+          if (!rangeOwners.has(range)) rangeOwners.set(range, new Set());
+          rangeOwners.get(range).add(block.key);
+          highlights.add(range);
+        }
       }
     }
     return true;
@@ -173,9 +203,10 @@
       const selected = C.selectBlocks(document, view);
       const selectedKeys = new Map(selected.blocks.map(block => [block.key, block.text]));
       for (const [key, record] of records) {
-        if (selectedKeys.get(key) !== record.block.text) removeRecord(key);
+        if (record.block.scale !== "context" && selectedKeys.get(key) !== record.block.text) removeRecord(key);
       }
       status.analyzed = 0;
+      status.contextAnalyzed = 0;
       status.partial = 0;
       status.scannedWords = 0;
       status.totalWords = selected.totalWords;
@@ -225,10 +256,82 @@
           || result.chunks.some(chunk => chunk.words < C.MIN_WORDS)) status.partial++;
         updateStatus();
       }
+      if (stopped || id !== runId) return;
+      const eligible = selected.blocks.filter(block => processed.get(block.key)?.text === block.text);
+      const sources = C.contextSources(eligible);
+      const signature = JSON.stringify(sources.map(group => [group.blocks.map(block => block.key), group.text]));
+      if (signature !== contextSignature) {
+        for (const block of contexts) removeRecord(block.key);
+        contexts = [];
+        contextProcessed.clear();
+        contextLimited = false;
+        const words = eligible.reduce((n, block) => n + block.words, 0);
+        if (words && plannedWords + words <= C.MAX_PAGE_WORDS
+          && sources.length <= 500 && sources.reduce((n, group) => n + C.charCount(group.text), 0) <= 500000) {
+          plannedWords += words;
+          activeBlock = { parts: eligible.flatMap(block => block.parts) };
+          activeDirty = false;
+          updateStatus("Planning larger contexts locally with the native tokenizer.");
+          try {
+            const plan = await request({ type: "PLAN_CONTEXT", runId: id, texts: sources.map(group => group.text) });
+            if (stopped || id !== runId) return;
+            if (location.href !== currentURL) { navigate(); return; }
+            if (activeDirty || !eligible.every(block => C.groupCurrent(block, view))) {
+              contextSignature = "";
+              pending = true;
+              return;
+            }
+            contexts = C.contextBlocks(sources, plan, document);
+            contextSignature = signature;
+          } catch (error) {
+            if (stopped || id !== runId) return;
+            status.state = "error";
+            observer.disconnect();
+            updateStatus(`Context planning failed: ${error.message} Update the helper and reload the extension/page if incompatible.`);
+            return;
+          }
+        } else {
+          contextSignature = signature;
+          if (words) contextLimited = true;
+        }
+      }
+      status.limited ||= contextLimited;
+      const exactResults = new Map([...processed.values(), ...contextProcessed.values()].map(saved => [saved.text, saved.result]));
+      for (const block of contexts) {
+        if (stopped || id !== runId) return;
+        if (!C.groupCurrent(block, view)) { status.skipped++; continue; }
+        if (!block.complete) { status.partial++; continue; }
+        let result = exactResults.get(block.text);
+        if (!result) {
+          if (contextWords + block.words > C.MAX_PAGE_WORDS) { status.limited = true; break; }
+          contextWords += block.words;
+          activeBlock = block;
+          activeDirty = false;
+          try { result = await request({ type: "ANALYZE", runId: id, text: block.text }); }
+          catch (error) {
+            if (stopped || id !== runId) return;
+            status.state = "error";
+            observer.disconnect();
+            updateStatus(`Context analysis failed: ${error.message}`);
+            return;
+          }
+          if (stopped || id !== runId) return;
+          if (location.href !== currentURL) { navigate(); return; }
+          if (activeDirty || !C.groupCurrent(block, view)) { status.skipped++; continue; }
+          exactResults.set(block.text, result);
+        }
+        contextProcessed.set(block.key, { text: block.text, result });
+        status.contextAnalyzed++;
+        if (C.shouldFlag(result, config) && !mark(block, block.index)) return;
+        if (result.status !== "complete") status.partial++;
+        updateStatus("Scanning larger contexts. Context marks apply to a region, not independently to each paragraph.");
+      }
+      // Retain only the current DOM revision, not an unbounded mutation history.
+      for (const [key, saved] of processed) if (selectedKeys.get(key) !== saved.text) processed.delete(key);
       status.state = "done";
       updateStatus(status.limited
         ? "Scan stopped at the page's word or extraction limit. Unscanned text has not been assessed."
-        : "Eligible prose processed from top to bottom. Short passages are grouped; a flag applies to the group, not individual sentences. Watching for changes within the remaining budget.");
+        : "Local passages and larger contexts processed. Either pass can flag a region, not prove authorship. Watching within separate 25,000-word local/context budgets.");
     } finally {
       activeBlock = undefined;
       running = false;
@@ -257,15 +360,16 @@
   function reapplyThreshold() {
     prune();
     const selected = C.selectBlocks(document, view);
-    const current = new Map(selected.blocks.map(block => [block.key, block.text]));
+    const blocks = [...selected.blocks, ...contexts.filter(block => C.groupCurrent(block, view))];
+    const current = new Map(blocks.map(block => [block.key, block.text]));
     for (const [key, record] of records) {
-      const saved = processed.get(key);
+      const saved = processed.get(key) || contextProcessed.get(key);
       if (current.get(key) !== record.block.text || !saved || !C.shouldFlag(saved.result, config)) removeRecord(key);
     }
-    for (const [index, block] of selected.blocks.entries()) {
-      const saved = processed.get(block.key);
+    for (const [index, block] of blocks.entries()) {
+      const saved = processed.get(block.key) || contextProcessed.get(block.key);
       if (saved?.text === block.text && C.groupCurrent(block, view) && C.shouldFlag(saved.result, config)) {
-        if (!mark(block, index)) break;
+        if (!mark(block, block.index ?? index)) break;
       }
     }
     updateStatus();
@@ -281,6 +385,12 @@
     stopped = false;
     if (C.pageKey(currentURL) !== C.pageKey(location.href)) {
       processed.clear();
+      contextProcessed.clear();
+      contexts = [];
+      contextSignature = "";
+      plannedWords = 0;
+      contextWords = 0;
+      contextLimited = false;
       usedWords = 0;
       for (const key of [...records.keys()]) removeRecord(key);
     }

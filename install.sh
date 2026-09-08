@@ -50,7 +50,7 @@ deckard_bootstrap() (
     if ! { exec 3<>/dev/tty; } 2>/dev/null; then
       fail 'No controlling terminal. Re-run with --yes and a supported --shell (or SHELL).'
     fi
-    printf 'Install Deckard v0.4.1 (including model weights) and configure shell %s? [y/N] ' "$shell_choice" >&3
+    printf 'Install Deckard v0.5.0 (including model weights) and configure shell %s? [y/N] ' "$shell_choice" >&3
     answer=
     IFS= read -r answer <&3 || fail 'Confirmation could not be read.'
     exec 3>&-
@@ -67,12 +67,12 @@ deckard_bootstrap() (
   trap 'rm -rf -- "$work"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
-  archive="$work/deckard-v0.4.1-macos-arm64.tar.gz"
-  url='https://github.com/sgoedecke/deckard/releases/download/v0.4.1/deckard-v0.4.1-macos-arm64.tar.gz'
-  printf 'Downloading Deckard v0.4.1…\n'
+  archive="$work/deckard-v0.5.0-macos-arm64.tar.gz"
+  url='https://github.com/sgoedecke/deckard/releases/download/v0.5.0/deckard-v0.5.0-macos-arm64.tar.gz'
+  printf 'Downloading Deckard v0.5.0…\n'
   curl --fail --location --proto '=https' --proto-redir '=https' \
     --connect-timeout 30 --max-time 1800 --output "$archive" "$url" ||
-    fail 'Download failed. The pinned v0.4.1 release must be published before this installer can be used.'
+    fail 'Download failed. The pinned v0.5.0 release must be published before this installer can be used.'
   actual=$(shasum -a 256 "$archive")
   actual=${actual%% *}
   [ "$actual" = "$expected" ] || fail 'Archive SHA-256 checksum mismatch; nothing was installed.'

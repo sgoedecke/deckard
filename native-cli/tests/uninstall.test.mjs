@@ -12,12 +12,12 @@ const write = (file, contents = "owned") => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
 };
-function fixture(t, version = "0.4.1") {
+function fixture(t, version = "0.5.0") {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".uninstall-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "application with spaces");
   const manifests = path.join(root, "native manifests");
-  const owned = ["0.4.0", "0.4.1"].includes(version);
+  const owned = ["0.4.0", "0.4.1", "0.5.0"].includes(version);
   const hostName = owned ? host : "com.example.other";
   const registration = path.join(manifests, `${hostName}.json`);
   const userHome = path.join(root, "user");
@@ -28,7 +28,8 @@ function fixture(t, version = "0.4.1") {
   const config = {
     format: 1, product: "Deckard", version, model: "ShantanuT01/gradient-ai-text-detector",
     revision: "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
-    policy: "gradient-q4-composite-v1-retrospective", flag_threshold: 0.9824231167326641,
+    policy: version === "0.5.0" ? "gradient-q4-two-scale-v1" : "gradient-q4-composite-v1-retrospective",
+    flag_threshold: version === "0.5.0" ? 0.97 : 0.9824231167326641,
     experimental: true, extension_id: "a".repeat(32), source: "verified-packed-export",
     weights_sha256: "1".repeat(64), tokenizer_sha256: "2".repeat(64), binary_sha256: "3".repeat(64),
     mlx_sha256: "4".repeat(64), metal_sha256: "5".repeat(64),

@@ -10,6 +10,7 @@ export function validResult(type, result) {
     && ["model", "revision", "runtime"].every(key => typeof result[key] === "string")
     && result.scheduling === "background" && result.max_chars === 20000
     && result.max_chunks === 4 && result.min_words === nativeCore.MIN_WORDS;
+  if (type === "plan") return result.status === "planned" && Array.isArray(result.groups);
   if (result.status === "skipped") return ["too_short", "too_short_after_chunking"].includes(result.reason)
     && nonnegative(result.words);
   return ["complete", "partial"].includes(result.status)
@@ -35,16 +36,23 @@ export class NativeQueue {
     this.session = Math.random().toString(36).slice(2);
   }
   request(type, text, owner = {}) {
-    if (!["ping", "analyze"].includes(type) || (type === "analyze"
+    if (!["ping", "analyze", "plan"].includes(type) || (type === "analyze"
       && (typeof text !== "string" || [...text].length > 20000 || !text.trim()))) {
       return Promise.reject(new NativeError("invalid_request", "Invalid native request."));
+    }
+    if (type === "plan" && (!Array.isArray(text) || !text.length || text.length > 500
+      || text.some(value => typeof value !== "string" || !value.trim())
+      || text.reduce((n, value) => n + nativeCore.charCount(value), 0) > 500000
+      || text.reduce((n, value) => n + nativeCore.wordCount(value), 0) > nativeCore.MAX_PAGE_WORDS)) {
+      return Promise.reject(new NativeError("invalid_request", "Invalid context planning request."));
     }
     if (this.active && this.queue.length >= this.maxQueued) {
       return Promise.reject(new NativeError("queue_full", "Local analysis queue is full. Try again later."));
     }
     return new Promise((resolve, reject) => {
       const job = { id: `${this.session}-${++this.sequence}`, type, owner, resolve, reject, cancelled: false };
-      if (type === "analyze") job.text = text;
+      if (type !== "ping") job.text = text;
+      if (type === "plan") job.planTexts = text;
       this.queue.push(job);
       this.pump();
     });
@@ -117,6 +125,7 @@ export class NativeQueue {
     }, job.type === "ping" ? this.pingTimeout : this.timeout);
     const message = { id: job.id, type: job.type, protocol_version: nativeCore.PROTOCOL_VERSION };
     if (job.type === "analyze") message.text = job.text;
+    if (job.type === "plan") message.texts = job.text;
     delete job.text;
     try { this.port.postMessage(message); } catch (error) {
       this.failAll(new NativeError("send_failed", error.message || "Native send failed."), true);
@@ -128,7 +137,8 @@ export class NativeQueue {
       this.failAll(new NativeError("protocol_error", "Unexpected native response."), true);
       return;
     }
-    if ((message.ok && !validResult(job.type, message.result))
+    if ((message.ok && (!validResult(job.type, message.result)
+      || (job.type === "plan" && !nativeCore.validPlan(message.result, job.planTexts))))
       || (!message.ok && (!message.error || typeof message.error.code !== "string"
         || typeof message.error.message !== "string"))) {
       this.failAll(new NativeError("protocol_error",

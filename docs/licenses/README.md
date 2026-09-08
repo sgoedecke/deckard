@@ -1,7 +1,7 @@
 # Model license provenance
 
 Verified against public upstream sources on 2026-09-07. These notices apply to
-the model and base used by Deckard 0.4.1, not to unrelated models or datasets.
+the model and base used by Deckard, not to unrelated models or datasets.
 Include this directory and `docs/MODEL-ATTRIBUTION.md` in model distributions.
 Runtime libraries have additional licenses collected by the native build.
 

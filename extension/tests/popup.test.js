@@ -64,7 +64,7 @@ test("popup has one On/Off switch, a threshold slider, and read-only setup", asy
 test("the slider preserves the precise default and only saves when committed", async () => {
   const h = await harness();
   assert.equal(Number(h.elements.get("threshold").value), globalThis.DeckardCore.FLAG_THRESHOLD * 100);
-  assert.equal(h.elements.get("threshold-value").textContent, "98.24");
+  assert.equal(h.elements.get("threshold-value").textContent, "97");
   assert.equal(h.calls.some(call => call.type === "SET_THRESHOLD"), false);
   h.elements.get("threshold").value = "80";
   h.elements.get("threshold").events.input();
@@ -112,7 +112,7 @@ test("popup reports marked counts with no hiding or reveal controls", async () =
       state: "done", detail: "Watching.", analyzed: 4, marked: 1, partial: 2, skipped: 3,
     } }) : original(message);
   h.poll(); await h.settle();
-  assert.equal(h.elements.get("progress").textContent, "0/0 processed · 4 scored · 1 marked · 2 partial · 3 skipped");
+  assert.equal(h.elements.get("progress").textContent, "0/0 processed · 4 local · 0 context · 1 marked · 2 partial · 3 skipped");
   assert.equal(h.elements.get("status").hidden, true);
   assert.doesNotMatch(html, /Show anyway|Collapse|are hidden/);
   assert.doesNotMatch(html, /marks high-scoring prose red|possible AI involvement|not specific AI-authored words|≥0.982423|not guaranteed/);
@@ -198,7 +198,7 @@ test("current-page word progress and finding buttons navigate without adding set
   };
   h.poll(); await h.settle();
   assert.equal(h.elements.get("page-title").textContent, "<img src=x>");
-  assert.equal(h.elements.get("progress").textContent, "25,000/30,000 processed · 4 scored · 1 marked · 0 partial · 0 skipped");
+  assert.equal(h.elements.get("progress").textContent, "25,000/30,000 processed · 4 local · 0 context · 1 marked · 0 partial · 0 skipped");
   assert.equal(h.elements.get("status").hidden, true);
   assert.doesNotMatch(h.elements.get("progress").textContent, /page cap|eligible|incomplete/);
   assert.equal(h.elements.get("results").hidden, false);
@@ -237,7 +237,7 @@ test("zero analyzed pages show only compact counters", async () => {
     : original(message);
   h.poll(); await h.settle();
   assert.equal(h.elements.get("status").hidden, true);
-  assert.equal(h.elements.get("progress").textContent, "0/0 processed · 0 scored · 0 marked · 0 partial · 0 skipped");
+  assert.equal(h.elements.get("progress").textContent, "0/0 processed · 0 local · 0 context · 0 marked · 0 partial · 0 skipped");
 });
 
 test("a late finding-navigation response cannot restore results after Off", async () => {

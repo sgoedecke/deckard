@@ -52,7 +52,7 @@ test("Deckard 0.4.0 upgrades in place and both release versions uninstall togeth
     const inode = fs.statSync(path.join(f.home, ".install.lock")).ino;
     const upgraded = f.install();
     assert.equal(upgraded.status, 0, upgraded.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.4.1");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.5.0");
     assert.equal(fs.readFileSync(f.profile, "utf8"), profile);
     assert.equal(fs.readdirSync(path.join(f.home, "releases")).length, 2);
     const removed = f.run("uninstall");

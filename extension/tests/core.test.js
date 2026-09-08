@@ -35,7 +35,7 @@ test("red marking requires enabled scanning and complete coverage with a chunk a
   const result = { ...modelIdentity, status: "complete", min_score: 0.91, max_score: 0.99, score: 0.95, truncated: false,
     chunks: [{ words: 80 }] };
   const settings = { enabled: true };
-  assert.equal(C.FLAG_THRESHOLD, 0.9824231167326641);
+  assert.equal(C.FLAG_THRESHOLD, 0.97);
   assert.equal(C.shouldFlag(result, settings), true);
   assert.equal(C.shouldFlag(result, { enabled: false }), false);
   assert.equal(C.shouldFlag({ ...result, max_score: 0.89 }, { enabled: true, threshold: 0 }), false);
@@ -61,7 +61,7 @@ test("a stale backend or an incompatible threshold cannot authorize a Deckard ma
   const result = { ...modelIdentity, status: "complete", max_score: 0.99,
     truncated: false, chunks: [{ words: 80 }] };
   for (const change of [{ model: "editlens" }, { protocol_version: 1 }, { flag_threshold: 0.9 },
-    { experimental: false }, { policy: "unknown" }, { max_score: 0.97 }]) {
+    { experimental: false }, { policy: "unknown" }, { max_score: 0.969999 }]) {
     assert.equal(C.shouldFlag({ ...result, ...change }, { enabled: true }), false);
   }
 });
@@ -125,6 +125,70 @@ function fixture(texts, { lang = "en" } = {}) {
   return doc;
 }
 const prose = "word ".repeat(80);
+
+test("context word ordinals map exact Unicode prose across parts, inline exclusions and split nodes", () => {
+  const doc = fixture([]);
+  const first = doc.element("p", ["  Café 🙂 ".repeat(30), doc.element("code", ["EXCLUDED"]),
+    doc.element("em", [" naïve\u00a0résumé ".repeat(15)]), "\nlast ".repeat(10)]);
+  const second = doc.element("p", ["second ".repeat(100)]);
+  doc.body.childrenText = [first, second];
+  first.parentElement = second.parentElement = doc.body;
+  const local = C.selectBlocks(doc).blocks;
+  const groups = C.contextSources(local);
+  assert.equal(groups.length, 1);
+  assert.ok(!groups[0].text.includes("EXCLUDED"));
+  const count = C.wordCount(groups[0].text);
+  const plan = { ...modelIdentity, status: "planned", groups: [[
+    { start_word: 0, end_word: 130, tokens: 200, complete: true },
+    { start_word: 130, end_word: count, tokens: 100, complete: true },
+  ]] };
+  const contexts = C.contextBlocks(groups, plan, doc);
+  assert.equal(contexts.map(block => block.text).join(""), groups[0].text);
+  assert.ok(contexts.every(block => C.groupCurrent(block, doc.defaultView)));
+  assert.equal(contexts[0].parts.at(-1).whole, false);
+  assert.equal(contexts[0].parts.at(-1).ranges.map(range => range.toString()).join(""), "second ".repeat(30).trim());
+  assert.equal(contexts[1].parts[0].ranges.map(range => range.toString()).join(""), "second ".repeat(70).trim());
+  second.childrenText[0].nodeValue = "changed";
+  assert.ok(contexts.every(block => !C.groupCurrent(block, doc.defaultView)));
+});
+
+test("context mapping rejects gaps, overlaps, incomplete coverage, invalid ordinals and wrong identity", () => {
+  const text = "original ".repeat(100).trim();
+  const span = { start_word: 0, end_word: 100, tokens: 100, complete: true };
+  const plan = { ...modelIdentity, status: "planned", groups: [[span]] };
+  assert.equal(C.validPlan(plan, [text]), true);
+  for (const bad of [{ start_word: 1 }, { end_word: 99 }, { end_word: 101 },
+    { end_word: 1.5 }, { tokens: -1 }, { complete: "true" }]) {
+    assert.equal(C.validPlan({ ...plan, groups: [[{ ...span, ...bad }]] }, [text]), false);
+  }
+  assert.equal(C.validPlan({ ...plan, groups: [[span, span]] }, [text]), false);
+  assert.equal(C.validPlan({ ...plan, policy: "old" }, [text]), false);
+});
+
+test("contexts starting inside the second part of a local group keep source order", () => {
+  const doc = fixture(Array(5).fill("original ".repeat(40)));
+  const groups = C.contextSources(C.selectBlocks(doc).blocks);
+  const contexts = C.contextBlocks(groups, { ...modelIdentity, status: "planned", groups: [[
+    { start_word: 0, end_word: 60, tokens: 60, complete: true },
+    { start_word: 60, end_word: 200, tokens: 140, complete: true },
+  ]] }, doc);
+  assert.equal(contexts[0].index, 0);
+  assert.ok(contexts[1].index > 0 && contexts[1].index < 1);
+});
+
+test("explicit articles are hard boundaries for local short groups and context partitions", () => {
+  const doc = fixture([]);
+  const a = doc.element("article", [doc.element("p", ["a ".repeat(30)])]);
+  const b = doc.element("article", [doc.element("p", ["b ".repeat(30)])]);
+  doc.body.childrenText = [a, b];
+  a.parentElement = b.parentElement = doc.body;
+  assert.equal(C.selectBlocks(doc).blocks.length, 0);
+  a.childrenText[0].childrenText[0].nodeValue = "a ".repeat(80);
+  b.childrenText[0].childrenText[0].nodeValue = "b ".repeat(80);
+  const sources = C.contextSources(C.selectBlocks(doc).blocks);
+  assert.equal(sources.length, 2);
+  assert.ok(sources[0].text.startsWith("a ") && sources[1].text.startsWith("b "));
+});
 
 test("neighboring short prose is combined and the page continues beyond twelve paragraphs", () => {
   const doc = fixture(["word ".repeat(40), "word ".repeat(40), ...Array(20).fill(prose), "word ".repeat(20)]);

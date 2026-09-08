@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -30,13 +29,13 @@ function replies(buffer) {
   return result;
 }
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deckard-native-test-"));
+  const root = fs.mkdtempSync(fileURLToPath(new URL("../build/protocol-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
   fs.mkdirSync(path.join(root, "models"));
   fs.writeFileSync(path.join(root, "models/packed.safetensors"), "fixture");
   fs.writeFileSync(path.join(root, "models/tokenizer.json"), "fixture");
   fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({
-    format: 1, product: "Deckard", version: "0.4.1", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
+    format: 1, product: "Deckard", version: "0.5.0", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
     flag_threshold: C.FLAG_THRESHOLD, experimental: true, extension_id: "a".repeat(32),
     weights_sha256: hash("fixture"), tokenizer_sha256: hash("fixture"),
   }));
@@ -60,9 +59,9 @@ test("native CLI help and pure native self-tests require no model", () => {
 test("real compiled native messaging matches the extension's validator without loading a model", t => {
   const home = fixture(t);
   const input = Buffer.concat([
-    frame({ id: "ping", type: "ping", protocol_version: 2 }),
-    frame({ id: "short", type: "analyze", protocol_version: 2, text: "private ".repeat(49).trim() }),
-    frame({ id: "after", type: "ping", protocol_version: 2 }),
+    frame({ id: "ping", type: "ping", protocol_version: 3 }),
+    frame({ id: "short", type: "analyze", protocol_version: 3, text: "private ".repeat(49).trim() }),
+    frame({ id: "after", type: "ping", protocol_version: 3 }),
   ]);
   const child = run(home, input);
   assert.equal(child.status, 0, child.stderr.toString());
@@ -79,8 +78,8 @@ test("real compiled native messaging matches the extension's validator without l
 test("legacy extension requests fail closed, and valid later requests still work", t => {
   const child = run(fixture(t), Buffer.concat([
     frame({ id: "old", type: "ping" }),
-    frame({ id: "bad", type: "analyze", protocol_version: 2, text: "x", extra: 1 }),
-    frame({ id: "new", type: "ping", protocol_version: 2 }),
+    frame({ id: "bad", type: "analyze", protocol_version: 3, text: "x", extra: 1 }),
+    frame({ id: "new", type: "ping", protocol_version: 3 }),
   ]));
   assert.equal(child.status, 0, child.stderr.toString());
   const output = replies(child.stdout);
@@ -91,7 +90,7 @@ test("legacy extension requests fail closed, and valid later requests still work
 test("invalid, oversized and truncated frames terminate with a framed error", t => {
   const home = fixture(t);
   const tooLarge = Buffer.alloc(4);
-  tooLarge.writeUInt32LE(131073);
+  tooLarge.writeUInt32LE(4 * 1024 * 1024 + 1);
   for (const input of [Buffer.from([1, 0]), tooLarge, frame(Buffer.from("{")), frame(Buffer.from([0xff]))]) {
     const child = run(home, input);
     assert.equal(child.status, 2, child.stderr.toString());
@@ -102,8 +101,8 @@ test("Unicode limits and missing assets produce explicit errors without page tex
   const home = fixture(t);
   fs.unlinkSync(path.join(home, "models/packed.safetensors"));
   const child = run(home, Buffer.concat([
-    frame({ id: "large", type: "analyze", protocol_version: 2, text: "x".repeat(20001) }),
-    frame({ id: "missing", type: "ping", protocol_version: 2 }),
+    frame({ id: "large", type: "analyze", protocol_version: 3, text: "x".repeat(20001) }),
+    frame({ id: "missing", type: "ping", protocol_version: 3 }),
   ]));
   assert.equal(child.status, 0);
   const output = replies(child.stdout);
@@ -121,3 +120,44 @@ test("installed metadata integrity and CLI argument errors are checked", t => {
   child = spawnSync(binary, ["start", "--download"], { encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 1);
 });
+
+test("context planning rejects malformed, excessive and legacy requests before loading assets", t => {
+  const invalid = [null, {}, [], [""], [null], ["x".repeat(500001)], ["x ".repeat(25001)],
+    Array(501).fill("word")];
+  const child = run(fixture(t), Buffer.concat([
+    ...invalid.map((texts, index) => frame({ id: `invalid-${index}`, type: "plan", protocol_version: 3, texts })),
+    frame({ id: "old-helper", type: "plan", protocol_version: 2, texts: ["hello"] }),
+  ]));
+  const output = replies(child.stdout);
+  assert.equal(child.status, 0);
+  assert.equal(output.length, invalid.length + 1);
+  assert.ok(output.slice(0, -1).every(reply => reply.error.code === "invalid_text"));
+  assert.equal(output.at(-1).error.code, "extension_update_required");
+});
+
+test("native tokenizer plans exact full Unicode coverage and rebalances a short tail without loading weights",
+  { skip: !process.env.DECKARD_MODEL_DIR }, t => {
+    const home = fixture(t);
+    const tokenizer = fs.readFileSync(path.join(process.env.DECKARD_MODEL_DIR, "tokenizer.json"));
+    fs.writeFileSync(path.join(home, "models/tokenizer.json"), tokenizer);
+    const config = JSON.parse(fs.readFileSync(path.join(home, "install.json")));
+    config.tokenizer_sha256 = hash(tokenizer);
+    fs.writeFileSync(path.join(home, "install.json"), JSON.stringify(config));
+    const texts = ["alpha ".repeat(540).trim(), "café 🙂 naïve\n\n".repeat(200).trim(),
+      "short ".repeat(49).trim(), "large ".repeat(3000).trim()];
+    const child = run(home, Buffer.concat([
+      frame({ id: "plan", type: "plan", protocol_version: 3, texts }),
+      frame({ id: "ping", type: "ping", protocol_version: 3 }),
+    ]));
+    assert.equal(child.status, 0, child.stderr);
+    const output = replies(child.stdout);
+    assert.equal(output[0].ok, true);
+    assert.equal(C.validPlan(output[0].result, texts), true);
+    const groups = output[0].result.groups;
+    assert.deepEqual(groups[0].map(span => span.end_word - span.start_word), [270, 270]);
+    assert.ok(groups[0].every(span => span.complete && span.tokens <= 510));
+    assert.ok(groups[1].every(span => span.complete && span.tokens <= 510));
+    assert.equal(groups[2][0].complete, false);
+    assert.ok(groups[3].length > 4, "no four-window document cap");
+    assert.equal(output[1].result.model_loaded, false);
+  });

@@ -1,7 +1,8 @@
 // Resource-bounded end-to-end model smoke; explicitly run, never part of npm test.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { NativeQueue } from "../../extension/native-queue.js";
@@ -99,10 +100,22 @@ try {
   assert.equal(result.score, result.max_score);
   assert.equal(result.cached, true);
   assert.equal((await queue.request("ping")).model_loaded, true);
+  const plan = await queue.request("plan", [text.repeat(6)]);
+  assert.equal(plan.status, "planned");
+  const replay = [];
+  if (process.argv[4]) {
+    const inputs = JSON.parse(await readFile(process.argv[4], "utf8"));
+    assert.ok(Array.isArray(inputs) && inputs.length <= 16);
+    for (const input of inputs) {
+      assert.ok(typeof input === "string" && input.length <= 20000);
+      replay.push({ sha256: createHash("sha256").update(input).digest("hex"),
+        result: await queue.request("analyze", input) });
+    }
+  }
   const beforeIdle = metrics();
   await new Promise(resolve => setTimeout(resolve, 2000));
   const afterIdle = metrics();
-  receipt = { status: "complete", minimum_words: 50, boundary, result,
+  receipt = { status: "complete", minimum_words: 50, boundary, result, plan, replay,
     before_idle: beforeIdle, after_idle: afterIdle };
   assert.ok(!stderr.includes(text));
 } finally {

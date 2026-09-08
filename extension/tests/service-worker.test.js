@@ -93,7 +93,7 @@ async function harness(initial = {}, options = {}) {
     url: "https://example.com/article" };
   let progressSequence = 0;
   const send = (message, sender = popup) => new Promise(resolve =>
-    events.message.listeners[0]({ protocol_version: 2, scanner_version: 6, page_url: sender.url, ...message,
+    events.message.listeners[0]({ protocol_version: 3, scanner_version: 7, page_url: sender.url, ...message,
       ...(message.type === "PAGE_PROGRESS" ? { status: { sequence: ++progressSequence, ...message.status } } : {}),
     }, sender, resolve));
   return { chrome, events, stored, granted, tabs, documents, scripts, messages, ports, injections, probes,
@@ -148,7 +148,7 @@ test("Deckard uses its own storage keys and leaves unrelated legacy settings unt
   const h = await harness({}, { initialRead: legacy, grants: origins });
   Object.assign(h.stored, legacy);
   assert.equal((await h.send({ type: "GET_SETTINGS" })).result.enabled, true);
-  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.9824231167326641);
+  assert.equal((await h.send({ type: "GET_SETTINGS" })).result.flagThreshold, 0.97);
   await h.send({ type: "SET_ENABLED", enabled: true });
   await h.send({ type: "SET_THRESHOLD", flagThreshold: 0.85 });
   assert.equal(h.stored.deckardSettings.enabled, true);
@@ -298,6 +298,16 @@ test("the original Chrome sender URL authorizes live SPA analysis, progress, foc
       total_tokens: 50, analyzed_tokens: 50, truncated: false, cached: false,
     } });
     assert.equal((await pending).ok, true);
+    const planning = h.send({ type: "PLAN_CONTEXT", runId: "spa", page_url, texts: ["word ".repeat(50)] }, h.content);
+    await h.settle();
+    assert.equal(port.sent.at(-1).type, "plan");
+    assert.equal(port.sent.at(-1).page_url, undefined);
+    port.onMessage.fire({ id: port.sent.at(-1).id, ok: true, result: {
+      ...modelIdentity, status: "planned", groups: [[
+        { start_word: 0, end_word: 50, tokens: 50, complete: true },
+      ]],
+    } });
+    assert.equal((await planning).ok, true);
     assert.equal((await h.send({ type: "PAGE_PROGRESS", runId: "spa", page_url,
       status: progress({ marked: 1, findings: [{ id: findingId, words: 50 }] }) }, h.content)).ok, true);
     h.chrome.tabs.sendMessage = async () => ({ focused: true });
@@ -314,7 +324,7 @@ test("missing, malformed, cross-origin and old-page URLs cannot replace or use a
   h.documents.get(1).url = page_url;
   await h.send({ type: "BEGIN_SCAN", runId: "current", page_url }, h.content);
   for (const url of [undefined, null, {}, "", "chrome://settings", "https://other.example/next", h.content.url]) {
-    for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
+    for (const type of ["GET_CONFIG", "BEGIN_SCAN", "ANALYZE", "PLAN_CONTEXT", "PAGE_PROGRESS", "CANCEL_SCAN"]) {
       const response = await h.send({ type, runId: "current", page_url: url,
         text: "private", status: progress() }, h.content);
       assert.equal(response.ok, false, `${type}: ${String(url)}`);

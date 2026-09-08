@@ -1,4 +1,4 @@
-# Deckard 0.4.1 model attribution
+# Deckard model attribution
 
 Deckard uses **Gradient — AI-Generated Text Detector**, published by
 **ShantanuT01 (Shantanu Thorat)**:
@@ -25,15 +25,16 @@ Deckard uses **Gradient — AI-Generated Text Detector**, published by
 
 Deckard converts the pinned weights for a local MLX runtime, with 4-bit
 quantization and a bounded, windowed scoring policy
-`gradient-q4-composite-v1-retrospective`. The [native protocol](NATIVE-PROTOCOL.md)
+`gradient-q4-two-scale-v1`. The [native protocol](NATIVE-PROTOCOL.md)
 specifies the exact model identity, 50-word minimum, coverage and score checks.
 It scores up to four windows per supplied passage and uses the maximum scored
-window, not an average or a judgment of every word.
+window, not an average or a judgment of every word. A complementary partition
+of larger contexts uses the same eligible prose, tokenizer and weights.
 
 The upstream card calls its sigmoid output P(AI) and describes a 0.5 decision
 threshold. **Deckard does not claim calibrated authorship probabilities or
-adopt that threshold.** Deckard's default is `0.9824231167326641` (98.24 on the
-slider); users may select 0.70–0.99. This is an experimental, retrospective
+adopt that threshold.** Deckard's default is `0.97` (97 on the
+slider); users may select 0.70–0.99. This is an experimental, user-selected
 cutoff, not a guarantee of any false-positive rate on real browsing.
 Upstream benchmark claims do not establish the accuracy of Deckard's
 quantized, windowed, browser-extracted scores.

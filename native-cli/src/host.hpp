@@ -10,6 +10,7 @@ public:
     ~Analyzer();
     Json ping();
     Json analyze(const std::string& text);
+    Json plan(const Json& texts);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

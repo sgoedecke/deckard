@@ -64,7 +64,7 @@ class Node {
     return null;
   }
 }
-async function harness({ auto = false, count = 1, getConfig, budget = 25000 } = {}) {
+async function harness({ auto = false, count = 1, getConfig, budget = 25000, dual = false, planHandler } = {}) {
   const root = new Node("html");
   root.lang = "en"; root.isConnected = true;
   const blocks = Array.from({ length: count }, () => {
@@ -88,6 +88,11 @@ async function harness({ auto = false, count = 1, getConfig, budget = 25000 } = 
     sendMessage: message => {
       requests.push(message);
       if (message.type === "ANALYZE") return new Promise(resolve => analyses.push({ message, resolve }));
+      if (message.type === "PLAN_CONTEXT") return planHandler ? planHandler(message) : Promise.resolve({
+        ok: true, result: { ...modelIdentity, status: "planned", groups: message.texts.map(text => [{
+          start_word: 0, end_word: globalThis.DeckardCore.wordCount(text), tokens: 100, complete: true,
+        }]) },
+      });
       if (message.type === "GET_CONFIG" && getConfig) return getConfig();
       return Promise.resolve({ ok: true, result: message.type === "GET_CONFIG"
         ? { ...settings } : {} });
@@ -106,6 +111,8 @@ async function harness({ auto = false, count = 1, getConfig, budget = 25000 } = 
     document, window, chrome, location: { href: "https://example.com/article" },
     crypto: { randomUUID: () => `id-${++id}` },
     DeckardCore: { ...globalThis.DeckardCore, MAX_PAGE_WORDS: budget,
+      contextSources: dual ? globalThis.DeckardCore.contextSources
+        : blocks => blocks.map(block => ({ blocks: [block], text: block.text })),
       selectBlocks: () => ({ blocks: blocks.filter(node => node.isConnected).map((node, index) => ({
         key: `block-${index}`, node, text: node.text, words: globalThis.DeckardCore.wordCount(node.text),
         parts: [{ node, text: node.text, whole: true, ranges: [] }],
@@ -172,6 +179,115 @@ test("content script is idempotent and marks prose red without hiding or replaci
   assert.equal(h.blocks[0].attrs["aria-hidden"], undefined);
 });
 
+test("97% context flags subthreshold locals; cached slider and Off/On reuse both passes and merge overlap", async () => {
+  const h = await harness({ dual: true, count: 2, budget: 160 });
+  const low = { ...result, score: 0.5, max_score: 0.5, min_score: 0.5 };
+  await h.start();
+  await h.finish(0, low);
+  await h.finish(1, low);
+  assert.equal(h.analyses.length, 3);
+  assert.equal(h.analyses[2].message.text, h.blocks.map(block => block.text).join("\n\n"));
+  await h.finish(2, { ...result, max_score: 0.976535, score: 0.976535 });
+  let status = await h.send({ type: "PAGE_STATUS" });
+  assert.equal(status.marked, 1);
+  assert.equal(status.analyzed, 2);
+  assert.equal(status.contextAnalyzed, 1);
+  assert.equal(status.scannedWords, 160);
+  assert.equal(status.contextWords, 160);
+  assert.equal(status.findings[0].context, true);
+  assert.ok(h.blocks.every(block => block.classes.size === 1));
+  h.settings.flagThreshold = 0.98;
+  await h.send({ type: "SETTINGS_CHANGED" });
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).marked, 0);
+  h.settings.flagThreshold = 0.97;
+  await h.send({ type: "SETTINGS_CHANGED" });
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).marked, 1);
+  await h.send({ type: "STOP" });
+  assert.ok(h.blocks.every(block => block.classes.size === 0));
+  await h.start();
+  assert.equal(h.analyses.length, 3);
+  assert.equal(h.requests.filter(message => message.type === "PLAN_CONTEXT").length, 1);
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).marked, 1);
+  h.settings.flagThreshold = 0.7;
+  await h.send({ type: "SETTINGS_CHANGED" });
+  assert.equal(h.analyses.length, 3);
+});
+
+test("overlapping local and context owners produce one finding and restore styles independently", async () => {
+  const h = await harness({ dual: true, count: 2 });
+  h.blocks[0].style.color = "blue";
+  await h.start();
+  await h.finish(0, result);
+  await h.finish(1, result);
+  await h.finish(2, { ...result, score: 0.975, max_score: 0.975 });
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).marked, 1);
+  h.settings.flagThreshold = 0.98;
+  await h.send({ type: "SETTINGS_CHANGED" });
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).marked, 2);
+  assert.ok(h.blocks.every(block => block.classes.size === 1));
+  await h.send({ type: "STOP" });
+  assert.ok(h.blocks.every(block => block.classes.size === 0));
+  assert.equal(h.blocks[0].style.color, "blue");
+});
+
+test("malformed plans fail visibly without context inference or cancelling a newer run", async () => {
+  const h = await harness({ dual: true, count: 1,
+    planHandler: () => Promise.resolve({ ok: true, result: { ...modelIdentity, status: "planned", groups: [[]] } }) });
+  await h.start();
+  await h.finish();
+  assert.equal(h.analyses.length, 1);
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).state, "error");
+  assert.equal(h.observer.active, false);
+});
+
+test("stale native planning cannot strand the new run's context partition", async () => {
+  const plans = [];
+  const h = await harness({ dual: true, count: 1,
+    planHandler: message => new Promise(resolve => plans.push({ message, resolve })) });
+  await h.start();
+  await h.finish();
+  assert.equal(plans.length, 1);
+  await h.send({ type: "STOP" });
+  await h.start();
+  const answer = { ok: true, result: { ...modelIdentity, status: "planned",
+    groups: [[{ start_word: 0, end_word: 80, tokens: 100, complete: true }]] } };
+  plans[0].resolve(answer);
+  await h.settle();
+  assert.equal(plans.length, 2);
+  plans[1].resolve(answer);
+  await h.settle();
+  assert.equal((await h.send({ type: "PAGE_STATUS" })).contextAnalyzed, 1);
+  assert.equal(h.analyses.length, 1, "identical local/context text reuses its result");
+});
+
+test("mutation replanning spends a separate bounded partition budget; Off/On cannot replenish it", async () => {
+  const h = await harness({ dual: true, count: 2, budget: 320 });
+  const low = { ...result, score: 0.5, max_score: 0.5, min_score: 0.5 };
+  await h.start();
+  await h.finish(0, low);
+  await h.finish(1, low);
+  await h.finish(2, result);
+  h.blocks[0].text = "changed ".repeat(80).trim();
+  await h.mutate(h.blocks[0]);
+  await h.finish(3, low);
+  await h.finish(4, result);
+  assert.equal(h.requests.filter(message => message.type === "PLAN_CONTEXT").length, 2);
+  h.blocks[0].text = "again ".repeat(80).trim();
+  await h.mutate(h.blocks[0]);
+  await h.finish(5, low);
+  let status = await h.send({ type: "PAGE_STATUS" });
+  assert.equal(status.usedWords, 320);
+  assert.equal(status.contextWords, 320);
+  assert.equal(status.marked, 0, "old contexts cannot accumulate after replanning is capped");
+  assert.equal(status.limited, true);
+  await h.send({ type: "STOP" });
+  await h.start();
+  status = await h.send({ type: "PAGE_STATUS" });
+  assert.equal(status.limited, true);
+  assert.equal(h.analyses.length, 6);
+  assert.equal(h.requests.filter(message => message.type === "PLAN_CONTEXT").length, 2);
+});
+
 test("duplicate starts retain the mark without adding controls or rescanning", async () => {
   const h = await harness();
   await h.start(); await h.finish();
@@ -193,7 +309,7 @@ test("a complete 50-word passage is scored and marked without changing the cutof
   assert.equal(status.analyzed, 1);
   assert.equal(status.marked, 1);
   assert.equal(status.usedWords, 50);
-  assert.equal(globalThis.DeckardCore.FLAG_THRESHOLD, 0.9824231167326641);
+  assert.equal(globalThis.DeckardCore.FLAG_THRESHOLD, 0.97);
 });
 
 test("low, partial, or short-chunk results leave no page annotations", async () => {
@@ -423,7 +539,7 @@ test("every scanner request carries the live URL, including SPA and hash changes
       assert.ok(requests.some(message => message.type === type), type);
     }
     assert.ok(requests.every(message => message.page_url === url
-      && message.scanner_version === 6 && message.protocol_version === 2));
+      && message.scanner_version === 7 && message.protocol_version === 3));
   }
 });
 
@@ -587,7 +703,7 @@ test("the scanner continues top-to-bottom beyond twelve passages and publishes t
   assert.equal(updates[0].status.state, "scanning");
   assert.equal(updates.at(-1).status.state, "done");
   assert.equal(updates.at(-1).status.marked, 20);
-  assert.ok(updates.every(message => message.scanner_version === 6));
+  assert.ok(updates.every(message => message.scanner_version === 7));
   assert.ok(!JSON.stringify(updates).includes(h.blocks[0].text));
 });
 

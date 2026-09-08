@@ -46,6 +46,33 @@ test("75-word helpers fail closed instead of silently skipping 50-word passages"
   }
 });
 
+test("context planning uses the same serialized queue and verifies coverage before resolving", async () => {
+  const h = harness();
+  const text = "original ".repeat(80).trim();
+  const planned = h.queue.request("plan", [text]);
+  const ping = h.queue.request("ping");
+  assert.deepEqual(h.ports[0].messages[0].texts, [text]);
+  assert.equal(h.ports[0].messages.length, 1);
+  h.reply({ ...modelIdentity, status: "planned", groups: [[
+    { start_word: 0, end_word: 80, tokens: 80, complete: true },
+  ]] });
+  assert.equal((await planned).status, "planned");
+  assert.equal(h.ports[0].messages.length, 2);
+  h.reply(ready);
+  await ping;
+  const malformed = h.queue.request("plan", [text]);
+  h.reply({ ...modelIdentity, status: "planned", groups: [[]] });
+  await assert.rejects(malformed, { code: "protocol_error" });
+});
+
+test("planning input limits reject abuse before creating a native connection", async () => {
+  const h = harness();
+  for (const input of [[], [""], [null], {}, ["x ".repeat(25001)], ["x".repeat(500001)], Array(501).fill("x")]) {
+    await assert.rejects(h.queue.request("plan", input), { code: "invalid_request" });
+  }
+  assert.equal(h.ports.length, 0);
+});
+
 test("default timers retain the browser global receiver through requests and cleanup", async () => {
   const timers = new Map();
   const context = vm.createContext({ timers, DeckardCore: globalThis.DeckardCore });
@@ -204,7 +231,7 @@ test("validates request size in Unicode characters, and result ranges", async ()
   assert.equal(validResult("analyze", { ...complete, score: NaN }), false);
   assert.equal(validResult("analyze", { ...modelIdentity, status: "skipped", reason: "too_short", words: 5 }), true);
   assert.equal(validResult("analyze", { ...modelIdentity, status: "skipped", reason: "too_short_after_chunking", words: 80 }), true);
-  assert.equal(h.ports[0].messages[0].protocol_version, 2);
+  assert.equal(h.ports[0].messages[0].protocol_version, 3);
   assert.equal(validResult("analyze", { ...complete, protocol_version: 1 }), false);
   assert.equal(validResult("analyze", { ...complete, score: 0.9 - Number.EPSILON, min_score: 0.9 }), true);
 });

@@ -13,7 +13,7 @@
 
 namespace aihider {
 namespace {
-constexpr size_t frame_limit = 131072;
+constexpr size_t frame_limit = 4 * 1024 * 1024;
 void deadline(int) {
     static constexpr char message[] = "Deckard: inference_deadline\n";
     (void)!write(STDERR_FILENO, message, sizeof(message) - 1);
@@ -111,24 +111,97 @@ Json Analyzer::analyze(const std::string& text) {
     if (impl_->cache.size() > 64) impl_->cache.pop_back();
     return result;
 }
+Json Analyzer::plan(const Json& texts) {
+    if (!impl_->tokenizer) {
+        installed_config(impl_->home, true);
+        impl_->tokenizer = std::make_unique<Tokenizer>(impl_->home / "models/tokenizer.json");
+    }
+    Json groups = Json::array();
+    size_t operations = 0;
+    for (const auto& value : texts) {
+        const auto& text = value.get_ref<const std::string&>();
+        const auto boundaries = word_boundaries(text);
+        auto tokens = [&](size_t a, size_t b) {
+            if (++operations > 20000) throw Error("planning_limit", "Context planning operation limit reached.");
+            return impl_->tokenizer->encode(text.substr(boundaries[a], boundaries[b] - boundaries[a]));
+        };
+        auto complete = [&](size_t a, size_t b) {
+            auto ids = tokens(a, b);
+            if (b - a < min_words || ids.empty() || ids.size() > 2040) return false;
+            for (const auto& part : windows(ids))
+                if (words(impl_->tokenizer->decode(part)) < min_words) return false;
+            return true;
+        };
+        std::vector<std::pair<size_t, size_t>> spans;
+        size_t i = 0, count = boundaries.size() - 1;
+        while (i < count) {
+            size_t lo = i + 1, hi = count, best = i + 1;
+            while (lo <= hi) {
+                size_t mid = (lo + hi) / 2;
+                if (tokens(i, mid).size() <= 510) { best = mid; lo = mid + 1; }
+                else hi = mid - 1;
+            }
+            spans.emplace_back(i, best);
+            i = best;
+        }
+        // Match the frozen verbatim, word-boundary partition; never decode/re-encode input.
+        if (spans.size() > 1 && !complete(spans.back().first, spans.back().second)) {
+            size_t a = spans[spans.size() - 2].first, b = spans.back().second;
+            size_t best = 0, difference = SIZE_MAX;
+            for (size_t cut = a + 1; cut < b; ++cut) {
+                size_t na = tokens(a, cut).size(), nb = tokens(cut, b).size();
+                size_t delta = na > nb ? na - nb : nb - na;
+                if (na <= 510 && nb <= 510 && delta < difference && complete(a, cut) && complete(cut, b)) {
+                    best = cut; difference = delta;
+                }
+            }
+            if (best) {
+                spans[spans.size() - 2] = {a, best};
+                spans.back() = {best, b};
+            }
+        }
+        Json planned = Json::array();
+        for (auto [a, b] : spans)
+            planned.push_back({{"start_word", a}, {"end_word", b}, {"tokens", tokens(a, b).size()},
+                               {"complete", complete(a, b)}});
+        groups.push_back(planned);
+    }
+    Json result = identity();
+    result.update({{"status", "planned"}, {"groups", groups}});
+    return result;
+}
 Json validate_request(const Json& request) {
     if (!request.is_object() || !request.contains("id") || !request["id"].is_string() ||
         request["id"].get_ref<const std::string&>().empty() ||
         characters(request["id"].get_ref<const std::string&>()) > 128)
         throw Error("invalid_request", "A request needs a nonempty string id of at most128 characters.");
     if (!request.contains("protocol_version") || !request["protocol_version"].is_number_integer() ||
-        request["protocol_version"] != 2)
+        request["protocol_version"] != protocol_version)
         throw Error("extension_update_required", "Reload the updated extension for the native Gradient protocol.");
     if (!request.contains("type") || !request["type"].is_string())
-        throw Error("invalid_request", "Supported requests are ping and analyze.");
+        throw Error("invalid_request", "Supported requests are ping, plan and analyze.");
     std::string type = request["type"];
-    if ((type != "ping" && type != "analyze") || request.size() != (type == "analyze" ? 4 : 3))
+    if ((type != "ping" && type != "analyze" && type != "plan") || request.size() != (type == "ping" ? 3 : 4))
         throw Error("invalid_request", "Unsupported request fields.");
     if (type == "analyze") {
         if (!request.contains("text") || !request["text"].is_string())
             throw Error("invalid_text", "Analyze requires text.");
         size_t count = characters(request["text"].get_ref<const std::string&>());
         if (!count || count > 20000) throw Error("invalid_text", "Text must contain 1..20000 Unicode characters.");
+    }
+    if (type == "plan") {
+        if (!request.contains("texts") || !request["texts"].is_array() ||
+            request["texts"].empty() || request["texts"].size() > 500)
+            throw Error("invalid_text", "Plan requires 1..500 source texts.");
+        size_t chars = 0, count = 0;
+        for (const auto& text : request["texts"]) {
+            if (!text.is_string() || text.get_ref<const std::string&>().empty())
+                throw Error("invalid_text", "Invalid context source.");
+            chars += characters(text.get_ref<const std::string&>());
+            count += word_boundaries(text.get_ref<const std::string&>()).size() - 1;
+            if (chars > 500000 || count > 25000)
+                throw Error("invalid_text", "Plan exceeds 500000 characters or 25000 words.");
+        }
     }
     return request;
 }
@@ -137,7 +210,7 @@ bool read_frame(std::istream& stream, Json& message) {
     stream.read(reinterpret_cast<char*>(&length), sizeof(length));
     if (stream.gcount() == 0 && stream.eof()) return false;
     if (stream.gcount() != sizeof(length)) throw Error("truncated_message", "Truncated native message header.");
-    if (!length || length > frame_limit) throw Error("message_too_large", "Native frame length is outside1..131072 bytes.");
+    if (!length || length > frame_limit) throw Error("message_too_large", "Native frame exceeds 4 MiB.");
     std::string body(length, '\0');
     stream.read(body.data(), static_cast<std::streamsize>(length));
     if (stream.gcount() != length) throw Error("truncated_message", "Truncated native message body.");
@@ -147,7 +220,7 @@ bool read_frame(std::istream& stream, Json& message) {
 }
 void write_frame(std::ostream& stream, const Json& message) {
     auto body = message.dump(-1, ' ', true);
-    if (body.size() > frame_limit) throw Error("response_too_large", "Native response exceeds the frame limit.");
+    if (body.size() > 1024 * 1024) throw Error("response_too_large", "Native response exceeds Chrome's 1 MiB limit.");
     uint32_t length = static_cast<uint32_t>(body.size());
     stream.write(reinterpret_cast<const char*>(&length), sizeof(length));
     stream.write(body.data(), static_cast<std::streamsize>(body.size()));
@@ -174,7 +247,8 @@ int serve(const fs::path& home) {
         try {
             validate_request(request);
             alarm(60);
-            Json result = request["type"] == "ping" ? analyzer.ping() : analyzer.analyze(request["text"]);
+            Json result = request["type"] == "ping" ? analyzer.ping() :
+                request["type"] == "plan" ? analyzer.plan(request["texts"]) : analyzer.analyze(request["text"]);
             alarm(0);
             write_frame(std::cout, {{"id", id}, {"ok", true}, {"result", result}});
         } catch (const Error& error) {
@@ -203,7 +277,7 @@ void self_test() {
         for (const auto& part : parts) { require(part.size() <= 510); total += part.size(); }
         require(total == std::min<size_t>(2040, count) && parts.size() <= 4);
     }
-    Json request = {{"id", "test"}, {"type", "ping"}, {"protocol_version", 2}};
+    Json request = {{"id", "test"}, {"type", "ping"}, {"protocol_version", protocol_version}};
     require(validate_request(request) == request);
     std::stringstream stream;
     write_frame(stream, request);

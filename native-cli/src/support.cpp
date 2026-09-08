@@ -209,8 +209,22 @@ double sigmoid(double value) {
     if (!std::isfinite(value)) throw Error("invalid_output", "The model returned a non-finite logit.");
     return value >= 0 ? 1 / (1 + std::exp(-value)) : std::exp(value) / (1 + std::exp(value));
 }
+std::vector<size_t> word_boundaries(const std::string& text) {
+    std::vector<size_t> result;
+    size_t offset = 0;
+    bool previous_space = true;
+    for (auto cp : codepoints(text)) {
+        bool space = whitespace(cp) || cp == 0xfeff;
+        if (!space && previous_space) result.push_back(offset);
+        previous_space = space;
+        offset += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    }
+    if (!result.empty()) result[0] = 0;
+    result.push_back(text.size());
+    return result;
+}
 Json identity() {
-    return {{"protocol_version", 2}, {"model", model_id}, {"revision", revision},
+    return {{"protocol_version", protocol_version}, {"model", model_id}, {"revision", revision},
             {"policy", policy_id}, {"flag_threshold", flag_threshold}, {"experimental", true},
             {"min_words", min_words}};
 }

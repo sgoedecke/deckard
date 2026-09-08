@@ -46,7 +46,9 @@ function sanitizeStatus(value) {
     if (!item || !validFinding(item.id) || seen.has(item.id)) continue;
     seen.add(item.id);
     findings.push({ id: item.id, label: `Passage ${findings.length + 1}`,
-      words: Number.isSafeInteger(item.words) ? Math.min(MAX_PAGE_WORDS, Math.max(0, item.words)) : 0 });
+      words: Number.isSafeInteger(item.words) ? Math.min(MAX_PAGE_WORDS, Math.max(0, item.words)) : 0,
+      context: item.context === true });
+    if (item.context === true) findings.at(-1).label = `Context ${findings.length}`;
   }
   return {
     state: value.state, analyzed: count("analyzed"), partial: count("partial"), skipped: count("skipped"),
@@ -55,7 +57,8 @@ function sanitizeStatus(value) {
     detail: typeof value.detail === "string" ? value.detail.slice(0, 300).replace(/[\u0000-\u001f\u007f]/g, " ") : "",
     sequence: count("sequence", Number.MAX_SAFE_INTEGER),
     scannedWords: count("scannedWords"), totalWords: count("totalWords"),
-    usedWords: count("usedWords"), findings,
+    usedWords: count("usedWords"), contextAnalyzed: count("contextAnalyzed"),
+    contextWords: count("contextWords"), findings,
   };
 }
 function badge(status) {
@@ -338,10 +341,12 @@ async function handleContent(message, sender) {
       updateBadge(tabId, status);
       return { started: true };
     }
+    case "PLAN_CONTEXT":
     case "ANALYZE": {
       const run = runs.get(tabId);
       (await authorizeRun(tabId, run, sender, message))();
-      const result = await broker.request("analyze", message.text, { tabId, runId: message.runId });
+      const result = await broker.request(message.type === "ANALYZE" ? "analyze" : "plan",
+        message.type === "ANALYZE" ? message.text : message.texts, { tabId, runId: message.runId });
       (await authorizeRun(tabId, run, sender, message))();
       return result;
     }

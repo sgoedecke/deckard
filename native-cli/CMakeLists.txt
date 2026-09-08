@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(deckard VERSION 0.4.1 LANGUAGES CXX)
+project(deckard VERSION 0.5.0 LANGUAGES CXX)
 if(NOT APPLE OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
   message(FATAL_ERROR "The MLX Metal backend requires Apple Silicon macOS.")
 endif()
