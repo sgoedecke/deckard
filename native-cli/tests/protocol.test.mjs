@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validResult } from "../../extension/native-queue.js";
+import { assets, installationMetadata } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const C = globalThis.DeckardCore;
@@ -31,14 +32,12 @@ function replies(buffer) {
 function fixture(t) {
   const root = fs.mkdtempSync(fileURLToPath(new URL("../build/protocol-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
-  fs.mkdirSync(path.join(root, "models"));
-  fs.writeFileSync(path.join(root, "models/packed.safetensors"), "fixture");
-  fs.writeFileSync(path.join(root, "models/tokenizer.json"), "fixture");
-  fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({
-    format: 1, product: "Deckard", version: "0.5.0", model: C.MODEL, revision: C.MODEL_REVISION, policy: C.POLICY,
-    flag_threshold: C.FLAG_THRESHOLD, experimental: true, extension_id: "a".repeat(32),
-    weights_sha256: hash("fixture"), tokenizer_sha256: hash("fixture"),
-  }));
+  for (const name of Object.keys(assets.files)) {
+    const file = path.join(root, "models", name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "fixture");
+  }
+  fs.writeFileSync(path.join(root, "install.json"), JSON.stringify(installationMetadata()));
   return root;
 }
 function run(home, input) {
@@ -69,6 +68,8 @@ test("real compiled native messaging matches the extension's validator without l
   assert.equal(output.length, 3);
   assert.ok(validResult("ping", output[0].result));
   assert.equal(output[0].result.min_words, 50);
+  assert.equal(output[0].result.runtime, "native-coreml");
+  assert.equal(output[0].result.scheduling, "default");
   assert.ok(validResult("analyze", output[1].result));
   assert.equal(output[1].result.status, "skipped");
   assert.equal(output[1].result.words, 49);
@@ -99,7 +100,7 @@ test("invalid, oversized and truncated frames terminate with a framed error", t 
 });
 test("Unicode limits and missing assets produce explicit errors without page text", t => {
   const home = fixture(t);
-  fs.unlinkSync(path.join(home, "models/packed.safetensors"));
+  fs.unlinkSync(path.join(home, "models/model.mlpackage/Data/com.apple.CoreML/model.mlmodel"));
   const child = run(home, Buffer.concat([
     frame({ id: "large", type: "analyze", protocol_version: 3, text: "x".repeat(20001) }),
     frame({ id: "missing", type: "ping", protocol_version: 3 }),
@@ -112,11 +113,14 @@ test("Unicode limits and missing assets produce explicit errors without page tex
 test("installed metadata integrity and CLI argument errors are checked", t => {
   const home = fixture(t);
   let child = spawnSync(binary, ["status", "--home", home], { encoding: "utf8", timeout: 15000 });
-  assert.equal(child.status, 0, child.stderr);
-  fs.appendFileSync(path.join(home, "models/packed.safetensors"), "changed");
+  assert.equal(child.status, 1, "untrusted fixture assets must not pass the compiled-in pins");
+  assert.match(child.stderr, /asset_mismatch/);
+  const config = JSON.parse(fs.readFileSync(path.join(home, "install.json")));
+  config.model_files["model.mlpackage/Data/com.apple.CoreML/model.mlmodel"] = hash("fixture");
+  fs.writeFileSync(path.join(home, "install.json"), JSON.stringify(config));
   child = spawnSync(binary, ["status", "--home", home], { encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 1);
-  assert.match(child.stderr, /asset_mismatch/);
+  assert.match(child.stderr, /invalid_installation/);
   child = spawnSync(binary, ["start", "--download"], { encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 1);
 });
@@ -145,13 +149,15 @@ test("native tokenizer plans exact full Unicode coverage and rebalances a short 
     fs.writeFileSync(path.join(home, "install.json"), JSON.stringify(config));
     const texts = ["alpha ".repeat(540).trim(), "café 🙂 naïve\n\n".repeat(200).trim(),
       "short ".repeat(49).trim(), "large ".repeat(3000).trim()];
-    const child = run(home, Buffer.concat([
+    fs.symlinkSync(".", path.join(home, "current"));
+    const child = run(path.join(home, "current"), Buffer.concat([
       frame({ id: "plan", type: "plan", protocol_version: 3, texts }),
+      frame({ id: "unverified-model", type: "analyze", protocol_version: 3, text: texts[0] }),
       frame({ id: "ping", type: "ping", protocol_version: 3 }),
     ]));
     assert.equal(child.status, 0, child.stderr);
     const output = replies(child.stdout);
-    assert.equal(output[0].ok, true);
+    assert.equal(output[0].ok, true, JSON.stringify(output[0].error));
     assert.equal(C.validPlan(output[0].result, texts), true);
     const groups = output[0].result.groups;
     assert.deepEqual(groups[0].map(span => span.end_word - span.start_word), [270, 270]);
@@ -159,5 +165,6 @@ test("native tokenizer plans exact full Unicode coverage and rebalances a short 
     assert.ok(groups[1].every(span => span.complete && span.tokens <= 510));
     assert.equal(groups[2][0].complete, false);
     assert.ok(groups[3].length > 4, "no four-window document cap");
-    assert.equal(output[1].result.model_loaded, false);
+    assert.equal(output[1].error.code, "asset_mismatch", "planning must not bypass model verification before inference");
+    assert.equal(output[2].result.model_loaded, false);
   });

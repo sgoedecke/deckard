@@ -8,7 +8,7 @@ export function validResult(type, result) {
   if (!nativeCore.validModelIdentity(result)) return false;
   if (type === "ping") return result.status === "ready" && typeof result.model_loaded === "boolean"
     && ["model", "revision", "runtime"].every(key => typeof result[key] === "string")
-    && result.scheduling === "background" && result.max_chars === 20000
+    && ["default", "background"].includes(result.scheduling) && result.max_chars === 20000
     && result.max_chunks === 4 && result.min_words === nativeCore.MIN_WORDS;
   if (type === "plan") return result.status === "planned" && Array.isArray(result.groups);
   if (result.status === "skipped") return ["too_short", "too_short_after_chunking"].includes(result.reason)

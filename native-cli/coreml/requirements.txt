@@ -1,0 +1,5 @@
+coremltools==9.0
+numpy==2.2.6
+safetensors==0.7.0
+torch==2.8.0
+tokenizers==0.22.2

@@ -33,12 +33,12 @@ test("Deckard brand, release version and native host remain consistent", () => {
   assert.equal(manifest.description, "Local AI-text detection for your browser.");
   assert.deepEqual(manifest.host_permissions, ["http://*/*", "https://*/*"]);
   assert.equal(manifest.optional_host_permissions, undefined);
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.6.0");
   const pkg = JSON.parse(read("../../package.json"));
   assert.equal(pkg.name, "deckard");
   assert.equal(pkg.version, manifest.version);
   const native = read("../../native-cli/src/support.hpp");
-  assert.match(native, /app_version = "0\.5\.0"/);
+  assert.match(native, /app_version = "0\.6\.0"/);
   assert.match(native, /host_name = "com\.sgoedecke\.deckard"/);
   assert.match(read("../service-worker.js"), /connectNative\("com\.sgoedecke\.deckard"\)/);
   assert.match(read("../popup.html"), /<title>Deckard<\/title>/);

@@ -2,7 +2,8 @@ if(NOT DEFINED NATIVE_CACHE OR NOT DEFINED TOKENIZER_DIR OR NOT DEFINED DESTINAT
   message(FATAL_ERROR "Native cache, tokenizer, and writable license destination are required.")
 endif()
 file(MAKE_DIRECTORY "${DESTINATION}")
-file(COPY "${NATIVE_CACHE}/licenses/" DESTINATION "${DESTINATION}")
+file(COPY "${NATIVE_CACHE}/licenses/" DESTINATION "${DESTINATION}"
+     PATTERN "MLX-LICENSE" EXCLUDE)
 file(GLOB_RECURSE candidates LIST_DIRECTORIES false "${NATIVE_CACHE}/cargo/registry/src/*")
 foreach(source IN LISTS candidates)
   get_filename_component(name "${source}" NAME)

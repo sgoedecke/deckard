@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "runtime": "native-coreml",
+  "model": "ShantanuT01/gradient-ai-text-detector",
+  "revision": "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
+  "source_weights_sha256": "85a9e02ebdcbbe1dd84cdbf893b708e44ee4691cadc7e1a4780039e22097ac98",
+  "precision": "fp16",
+  "sequence_length": 512,
+  "model_package": "model.mlpackage",
+  "files": {
+    "model.mlpackage/Manifest.json": "dd4092738cdb2bdfef765c1b1abf603557931d4a5c01ac4638b33cba41e9f687",
+    "model.mlpackage/Data/com.apple.CoreML/model.mlmodel": "e358edc56dd0c9e41ecd9269b14e930fa4d35cd2620490ed29c320e848cbfecd",
+    "model.mlpackage/Data/com.apple.CoreML/weights/weight.bin": "d8255a97b3ef52247051c42ab50e8fcd7736e3e471323e02bb42604f86ce6b6c",
+    "tokenizer.json": "4b4f60231058db4b5794e7b124bb7945bc8ade6719282de4d2e0372ee527b929"
+  }
+}

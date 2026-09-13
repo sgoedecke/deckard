@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Deckard",
   "description": "Local AI-text detection for your browser.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtAHxdvResBLhe6EVTnVBMtFheKSrFD6FhG4gBUEGKu6mG+geVuj6JN5PHj9T7s7Ajw5KQlT4RUlq3i7GgDLId8It2L1/n1a/CjjYhALMqt2wvYGH68tKTRsWYoh1qP78EnpYu5bigW3cTqmRNnYa7QTI+S3IjCAV5kXJW4LzR2rnk2XQ/Psw6yji0Y1lT4ZO10+cMN2AsWNxich91D4CpAqxSnMrwvYtOWd/PzXhAFoi5D0ixN9zGN8pNOflJjnInI4ZVvujSjJMRpztz3Emoj+EsNfKeY4c1zvNiPPHktVia6nkqTX+0XTKqbcftU9So/DhE9EoWwgFv9RTJf+GWwIDAQAB",
   "minimum_chrome_version": "121",
   "permissions": ["scripting", "storage", "nativeMessaging"],

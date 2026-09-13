@@ -1,4 +1,5 @@
 #include "support.hpp"
+#include "model_assets.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <curl/curl.h>
 #include <mach-o/dyld.h>
@@ -14,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <set>
 
 namespace aihider {
 namespace {
@@ -191,6 +193,47 @@ void background() {
         pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0) != 0)
         throw Error("scheduling_failed", "Cannot enable background scheduling.");
 }
+void default_priority() {
+    if (setpriority(PRIO_DARWIN_PROCESS, 0, 0) != 0 ||
+        pthread_set_qos_class_self_np(QOS_CLASS_DEFAULT, 0) != 0)
+        throw Error("scheduling_failed", "Cannot enable default-priority inference.");
+}
+const Json& model_assets() {
+    static const auto assets = Json::parse(model_assets_json);
+    return assets;
+}
+std::string model_assets_id() { return model_assets_sha256; }
+fs::path model_cache() { return user_home() / "Library/Caches/Deckard/coreml"; }
+void verify_model_assets(const fs::path& directory, bool verify_hashes) {
+    std::error_code error;
+    const auto root = fs::canonical(directory, error);
+    if (error) throw Error("missing_assets", "Core ML model assets are missing. Install the Core ML release bundle.");
+    std::set<fs::path> directories;
+    const auto& files = model_assets().at("files");
+    for (auto it = files.begin(); it != files.end(); ++it) {
+        const fs::path relative(it.key());
+        fs::path current = root;
+        for (const auto& part : relative) {
+            current /= part;
+            const auto status = fs::symlink_status(current);
+            if (status.type() == fs::file_type::not_found)
+                throw Error("missing_assets", "Core ML model assets are missing. Install the Core ML release bundle.");
+            const bool leaf = current == root / relative;
+            if (leaf ? !fs::is_regular_file(status) : !fs::is_directory(status))
+                throw Error("asset_mismatch", "Model assets must be ordinary files and directories, not links.");
+            if (!leaf) directories.insert(current.lexically_relative(root));
+        }
+        if (verify_hashes) require_hash(root / relative, it.value().get<std::string>());
+    }
+    // Core ML must never consume extra, unpinned files hidden inside the package.
+    for (const auto& entry : fs::recursive_directory_iterator(root / model_assets().at("model_package").get<std::string>())) {
+        const auto relative = entry.path().lexically_relative(root);
+        const auto status = entry.symlink_status();
+        if ((fs::is_directory(status) && directories.count(relative)) ||
+            (fs::is_regular_file(status) && files.contains(relative.generic_string()))) continue;
+        throw Error("asset_mismatch", "The Core ML package contains unexpected assets.");
+    }
+}
 bool extension_id_valid(const std::string& id) {
     return id.size() == 32 && id.find_first_not_of("abcdefghijklmnop") == std::string::npos;
 }
@@ -235,15 +278,17 @@ Json installed_config(const fs::path& home, bool verify) {
         config.value("model", Json()) != model_id || config.value("revision", Json()) != revision ||
         config.value("policy", Json()) != policy_id || config.value("flag_threshold", Json()) != flag_threshold ||
         config.value("experimental", Json()) != true ||
-        !config.value("weights_sha256", Json()).is_string() || !config.value("tokenizer_sha256", Json()).is_string())
-        throw Error("invalid_installation", "Installation metadata is incompatible. Run deckard install.");
-    if (!fs::is_regular_file(home / "models/packed.safetensors") ||
-        !fs::is_regular_file(home / "models/tokenizer.json"))
-        throw Error("missing_assets", "Model assets are missing. Run deckard install.");
-    if (verify) {
-        require_hash(home / "models/packed.safetensors", config.at("weights_sha256").get<std::string>());
-        require_hash(home / "models/tokenizer.json", config.at("tokenizer_sha256").get<std::string>());
-    }
+        config.value("runtime", Json()) != runtime_id ||
+        config.value("source", Json()) != "verified-coreml-export" ||
+        config.value("weights_sha256", Json()) != packed_sha ||
+        config.value("tokenizer_sha256", Json()) != tokenizer_sha ||
+        config.value("model_assets_sha256", Json()) != model_assets_id() ||
+        config.value("model_files", Json()) != model_assets().at("files"))
+        throw Error("invalid_installation", "Installation metadata is incompatible. Install the Core ML release bundle.");
+    const auto models = fs::canonical(home) / "models";
+    if (!fs::is_directory(fs::symlink_status(models)))
+        throw Error("missing_assets", "Model assets are missing or redirected. Run deckard install.");
+    verify_model_assets(models, verify);
     return config;
 }
 }

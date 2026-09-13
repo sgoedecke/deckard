@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
-project(deckard VERSION 0.5.0 LANGUAGES CXX)
+project(deckard VERSION 0.6.0 LANGUAGES CXX OBJCXX)
 if(NOT APPLE OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-  message(FATAL_ERROR "The MLX Metal backend requires Apple Silicon macOS.")
+  message(FATAL_ERROR "The Core ML CPU/Neural Engine backend requires Apple Silicon macOS.")
 endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OBJCXX_STANDARD 20)
+set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0")
-set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
-set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 get_filename_component(AI_HIDER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 if(DEFINED ENV{NATIVE_CACHE})
@@ -15,10 +15,13 @@ if(DEFINED ENV{NATIVE_CACHE})
 else()
   set(NATIVE_CACHE "${AI_HIDER_ROOT}/cache/native-build" CACHE PATH "Native dependency cache")
 endif()
-set(MLX_DIR "${NATIVE_CACHE}/mlx-sdk/mlx/share/cmake/MLX" CACHE PATH "Pinned native MLX SDK")
-find_package(MLX 0.32.2 EXACT REQUIRED CONFIG)
 add_library(ai_hider_json INTERFACE)
 target_include_directories(ai_hider_json INTERFACE "${NATIVE_CACHE}/json/include")
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/model-assets.json")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/model-assets.json" MODEL_ASSETS_JSON)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/model-assets.json" MODEL_ASSETS_SHA256)
+configure_file(src/model_assets.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/model_assets.hpp" @ONLY)
 
 set(RUST_TOOLCHAIN "${NATIVE_CACHE}/rustup/toolchains/1.90.0-aarch64-apple-darwin")
 set(CARGO "${RUST_TOOLCHAIN}/bin/cargo" CACHE FILEPATH "Cargo executable")
@@ -34,6 +37,7 @@ add_custom_command(
   OUTPUT "${RUST_TARGET}/release/libai_hider_tokenizer.a"
   COMMAND "${CMAKE_COMMAND}" -E env
     "CARGO_HOME=${BUILD_CARGO_HOME}" "RUSTUP_HOME=${NATIVE_CACHE}/rustup"
+    "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
     "RUSTC=${RUST_TOOLCHAIN}/bin/rustc"
     "CARGO_ENCODED_RUSTFLAGS=${RUST_PATH_FLAGS}"
     "RUSTUP_TOOLCHAIN=1.90.0" "CARGO_TARGET_DIR=${RUST_TARGET}" "CARGO_BUILD_JOBS=2"
@@ -51,19 +55,15 @@ add_custom_target(dependency_notices ALL
     -P "${CMAKE_CURRENT_SOURCE_DIR}/collect-licenses.cmake"
   DEPENDS tokenizer_build VERBATIM)
 
-add_executable(deckard src/main.cpp src/gradient.cpp src/tokenizer.cpp src/support.cpp src/host.cpp src/setup.cpp)
-target_include_directories(deckard PRIVATE src)
+add_executable(deckard src/main.cpp src/coreml_gradient.mm src/tokenizer.cpp src/support.cpp src/host.cpp src/setup.cpp)
+target_include_directories(deckard PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set_source_files_properties(src/coreml_gradient.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(deckard PRIVATE -Wall -Wextra
   "-ffile-prefix-map=${AI_HIDER_ROOT}=/deckard-source"
   "-ffile-prefix-map=${NATIVE_CACHE}=/deckard-sdk")
-target_link_libraries(deckard PRIVATE mlx tokenizer_native ai_hider_json "-lcurl" "-framework Security" "-framework CoreFoundation")
-add_custom_command(TARGET deckard POST_BUILD
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/lib"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${MLX_LIBRARY_DIRS}/libmlx.dylib" "${CMAKE_CURRENT_BINARY_DIR}/lib/"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${MLX_LIBRARY_DIRS}/mlx.metallib" "${CMAKE_CURRENT_BINARY_DIR}/lib/"
-  VERBATIM)
+target_link_libraries(deckard PRIVATE tokenizer_native ai_hider_json "-lcurl" "-framework Security"
+  "-framework CoreFoundation" "-framework Foundation" "-framework CoreML")
 install(TARGETS deckard RUNTIME DESTINATION bin)
-install(FILES "${MLX_LIBRARY_DIRS}/libmlx.dylib" "${MLX_LIBRARY_DIRS}/mlx.metallib" DESTINATION lib)
 install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses/" DESTINATION share/licenses)
 
 enable_testing()

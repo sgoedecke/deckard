@@ -23,6 +23,14 @@ before(async () => {
   template = await fs.readFile(path.join(root, 'install.sh'), 'utf8');
   await executable('uname', 'case "$1" in -s) echo "${MOCK_OS:-Darwin}";; -m) echo "${MOCK_ARCH:-arm64}";; esac');
   await executable('sw_vers', 'echo "${MOCK_VERSION:-15.0}"');
+  await executable('tar', `
+case " $* " in
+  *" -tzf "*) if [ -n "\${MOCK_ENTRIES:-}" ]; then cat "$MOCK_ENTRIES"; exit; fi ;;
+  *" -tvzf "*) if [ -n "\${MOCK_DETAILS:-}" ]; then cat "$MOCK_DETAILS"; exit; fi ;;
+esac
+exec /usr/bin/tar "$@"
+`);
+  await executable('wc', 'if [ -n "${MOCK_ARCHIVE_BYTES:-}" ]; then echo "$MOCK_ARCHIVE_BYTES"; else exec /usr/bin/wc "$@"; fi');
   await executable('curl', `
 printf '%s\\n' "$@" > "$CURL_LOG"
 output=
@@ -32,13 +40,14 @@ done
 cp "$MOCK_ARCHIVE" "$output"
 `);
   const bundle = path.join(scratch, 'bundle');
-  for (const dir of ['bin', 'lib', 'share/licenses', 'extension', 'models']) await fs.mkdir(path.join(bundle, dir), { recursive: true });
+  for (const dir of ['bin', 'share/licenses', 'extension', 'models/model.mlpackage/Data/com.apple.CoreML/weights']) await fs.mkdir(path.join(bundle, dir), { recursive: true });
   await fs.writeFile(path.join(bundle, 'bin/deckard'), '#!/bin/bash\nprintf "%s\\n" "$@" > "$NATIVE_LOG"\nexit "${NATIVE_EXIT:-0}"\n', { mode: 0o755 });
-  for (const file of ['lib/libmlx.dylib', 'share/licenses/LICENSE', 'extension/manifest.json', 'models/packed.safetensors', 'models/tokenizer.json']) {
+  for (const file of ['share/licenses/LICENSE', 'extension/manifest.json', 'models/model.mlpackage/Manifest.json',
+    'models/model.mlpackage/Data/com.apple.CoreML/model.mlmodel', 'models/model.mlpackage/Data/com.apple.CoreML/weights/weight.bin', 'models/tokenizer.json']) {
     await fs.writeFile(path.join(bundle, file), 'fixture');
   }
   archive = path.join(scratch, 'bundle.tar.gz');
-  const result = spawnSync('/usr/bin/tar', ['-czf', archive, '-C', bundle, 'bin', 'lib', 'share', 'extension', 'models']);
+  const result = spawnSync('/usr/bin/tar', ['-czf', archive, '-C', bundle, 'bin', 'share', 'extension', 'models']);
   assert.equal(result.status, 0, result.stderr?.toString());
   digest = hash(await fs.readFile(archive));
 });
@@ -91,7 +100,7 @@ test('curl-piped installer forwards spaces and options to native, which owns set
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.native, /^install\n--home\nan isolated home\n--manifest-dir\nmanifest with spaces\n--extension-id\nabcdefghijklmnopabcdefghijklmnop\n--model-dir\n.*\/bundle\/models\n--extension-dir\n.*\/bundle\/extension\n--shell\nbash\n$/);
   assert.match(result.curl, /--proto\n=https\n--proto-redir\n=https\n/);
-  assert.match(result.curl, /https:\/\/github\.com\/sgoedecke\/deckard\/releases\/download\/v0\.5\.0\/deckard-v0\.5\.0-macos-arm64\.tar\.gz/);
+  assert.match(result.curl, /https:\/\/github\.com\/sgoedecke\/deckard\/releases\/download\/v0\.6\.0\/deckard-v0\.6\.0-macos-arm64\.tar\.gz/);
   assert.ok(!result.files.some(file => file.startsWith('.deckard-bootstrap.')));
 });
 
@@ -140,7 +149,7 @@ test('no controlling terminal fails clearly without --yes', async () => {
 test('pipe prompts read from controlling tty, never script stdin', { skip: process.platform !== 'darwin' }, async () => {
   const result = await invoke(['--shell', 'none'], { tty: true });
   assert.equal(result.error, undefined);
-  assert.match(result.stdout, /Install Deckard v0\.5\.0/);
+  assert.match(result.stdout, /Install Deckard v0\.6\.0/);
   assert.match(result.native ?? '', /^install\n/);
 });
 
@@ -182,6 +191,62 @@ test('source template fails closed before downloading', async () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /missing pinned archive/);
   assert.equal(result.curl, null);
+});
+
+test('archive bytes must be strictly below the GitHub asset size limit', async () => {
+  const result = await invoke(undefined, { env: { MOCK_ARCHIVE_BYTES: '2147483648' } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /under 2147483648 bytes/);
+  assert.equal(result.native, null);
+});
+
+test('expanded archive bounds permit the FP16 model but reject oversized members and totals', async () => {
+  const details = path.join(scratch, 'bounded-details');
+  for (const [listing, allowed] of [
+    ['-rw-r--r--  0 0 0 978321408 Jan 1 00:00 models/weights\n', true],
+    ['-rw-r--r-- 0/0 978321408 2026-01-01 00:00 models/weights\n', true],
+    ['-rw-r--r--  0 0 0 2147483648 Jan 1 00:00 models/weights\n', false],
+    [Array(3).fill('-rw-r--r--  0 0 0 1600000000 Jan 1 00:00 models/weights\n').join(''), false],
+    ['-rw-r--r--  0 0 0 invalid Jan 1 00:00 models/weights\n', false],
+  ]) {
+    await fs.writeFile(details, listing);
+    const result = await invoke(undefined, { env: { MOCK_DETAILS: details } });
+    if (allowed) assert.equal(result.status, 0, result.stderr);
+    else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /size or entry bounds/);
+      assert.equal(result.native, null);
+    }
+  }
+});
+
+test('archive entry count is bounded before extraction', async () => {
+  const entries = path.join(scratch, 'too-many-entries');
+  await fs.writeFile(entries, Array.from({ length: 20001 }, (_, i) => `models/file-${i}\n`).join(''));
+  const result = await invoke(undefined, { env: { MOCK_ENTRIES: entries } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unsafe archive path/);
+  assert.equal(result.native, null);
+});
+
+test('each nested Core ML file and the tokenizer is required', async () => {
+  for (const name of [
+    'model.mlpackage/Manifest.json',
+    'model.mlpackage/Data/com.apple.CoreML/model.mlmodel',
+    'model.mlpackage/Data/com.apple.CoreML/weights/weight.bin',
+    'tokenizer.json',
+  ]) {
+    const bundle = path.join(scratch, `incomplete-${++sequence}`);
+    await fs.cp(path.join(scratch, 'bundle'), bundle, { recursive: true });
+    await fs.rm(path.join(bundle, 'models', name));
+    const file = `${bundle}.tar.gz`;
+    const packed = spawnSync('/usr/bin/tar', ['-czf', file, '-C', bundle, 'bin', 'share', 'extension', 'models']);
+    assert.equal(packed.status, 0, packed.stderr?.toString());
+    const result = await invoke(undefined, { archive: file, digest: hash(await fs.readFile(file)) });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /missing required files/);
+    assert.equal(result.native, null);
+  }
 });
 
 test('native installation errors propagate unchanged and staging is removed', async () => {
@@ -228,6 +293,10 @@ test('archive traversal, links, special files and duplicate paths are rejected b
     [tarEntry('models/link', '1', '/escape')],
     [tarEntry('models/pipe', '6')],
     [tarEntry('models/file'), tarEntry('models/file')],
+    [tarEntry('models/directory'), tarEntry('models/directory/', '5')],
+    [tarEntry('models/packed.safetensors')],
+    [tarEntry('lib/libmlx.dylib')],
+    [tarEntry('share/licenses/MLX-LICENSE')],
   ];
   for (const entries of cases) {
     const data = gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]));

@@ -50,7 +50,7 @@ deckard_bootstrap() (
     if ! { exec 3<>/dev/tty; } 2>/dev/null; then
       fail 'No controlling terminal. Re-run with --yes and a supported --shell (or SHELL).'
     fi
-    printf 'Install Deckard v0.5.0 (including model weights) and configure shell %s? [y/N] ' "$shell_choice" >&3
+    printf 'Install Deckard v0.6.0 (including Core ML model weights) and configure shell %s? [y/N] ' "$shell_choice" >&3
     answer=
     IFS= read -r answer <&3 || fail 'Confirmation could not be read.'
     exec 3>&-
@@ -59,7 +59,7 @@ deckard_bootstrap() (
   expected='@ARCHIVE_SHA256@'
   case "$expected" in ''|*[!0-9a-f]*) fail 'This source template is not a release installer: missing pinned archive SHA-256.' ;; esac
   [ "${#expected}" -eq 64 ] || fail 'Invalid pinned archive SHA-256.'
-  for tool in curl shasum tar awk sort uniq; do
+  for tool in curl shasum tar awk sort uniq wc; do
     command -v "$tool" >/dev/null || fail "Required command not found: $tool"
   done
   work="$PWD/.deckard-bootstrap.$$.$RANDOM"
@@ -67,35 +67,54 @@ deckard_bootstrap() (
   trap 'rm -rf -- "$work"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
-  archive="$work/deckard-v0.5.0-macos-arm64.tar.gz"
-  url='https://github.com/sgoedecke/deckard/releases/download/v0.5.0/deckard-v0.5.0-macos-arm64.tar.gz'
-  printf 'Downloading Deckard v0.5.0…\n'
+  archive="$work/deckard-v0.6.0-macos-arm64.tar.gz"
+  url='https://github.com/sgoedecke/deckard/releases/download/v0.6.0/deckard-v0.6.0-macos-arm64.tar.gz'
+  printf 'Downloading Deckard v0.6.0…\n'
   curl --fail --location --proto '=https' --proto-redir '=https' \
     --connect-timeout 30 --max-time 1800 --output "$archive" "$url" ||
-    fail 'Download failed. The pinned v0.5.0 release must be published before this installer can be used.'
+    fail 'Download failed. The pinned v0.6.0 release must be published before this installer can be used.'
+  archive_bytes=$(wc -c < "$archive")
+  [ "$archive_bytes" -gt 0 ] && [ "$archive_bytes" -lt 2147483648 ] ||
+    fail 'Release archive must be under 2147483648 bytes (2 GiB).'
   actual=$(shasum -a 256 "$archive")
   actual=${actual%% *}
   [ "$actual" = "$expected" ] || fail 'Archive SHA-256 checksum mismatch; nothing was installed.'
   tar -tzf "$archive" > "$work/entries" || fail 'Cannot inspect release archive.'
-  tar -tvzf "$archive" > "$work/details" || fail 'Cannot inspect release archive types.'
+  tar --numeric-owner -tvzf "$archive" > "$work/details" || fail 'Cannot inspect release archive types.'
   # Reject all links and special files, not just obvious "../" paths. Restrict
   # names to the release format so escaped newlines cannot disguise entries.
   awk '
     !/^[A-Za-z0-9_.\/-]+$/ { exit 1 }
     /^\// || /(^|\/)\.\.?($|\/)/ || /\/\// { exit 1 }
-    !/^(bin|lib|share|extension|models)(\/|$)/ { exit 1 }
+    !/^(bin|share|extension|models)(\/|$)/ { exit 1 }
+    /(^|\/)(packed\.safetensors|libmlx\.dylib|mlx\.metallib|MLX-LICENSE)($|\/)/ { exit 1 }
+    NR > 20000 { exit 1 }
     END { if (NR == 0) exit 1 }
   ' "$work/entries" || fail 'Unsafe archive path.'
   awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" { exit 1 }
        END { if (NR == 0) exit 1 }' "$work/details" || fail 'Archive links or special files are not permitted.'
-  [ -z "$(sort "$work/entries" | uniq -d)" ] || fail 'Duplicate archive paths are not permitted.'
+  # BSD tar has separate numeric uid/gid columns; GNU tar uses uid/gid.
+  # The FP16 payload is roughly 1 GiB, so retain room for it while bounding
+  # individual members, total extracted bytes, and entry count.
+  awk '{
+         size = ($2 ~ /^[0-9]+\/[0-9]+$/) ? $3 : $5
+         if (size !~ /^[0-9]+$/ || size >= 2147483648 || NR > 20000) exit 1
+         total += size
+         if (total >= 4294967296) exit 1
+       }
+       END { if (NR == 0) exit 1 }' "$work/details" || fail 'Archive size or entry bounds exceeded.'
+  [ -z "$(awk '{ sub(/\/$/, ""); print }' "$work/entries" | sort | uniq -d)" ] ||
+    fail 'Duplicate archive paths are not permitted.'
   mkdir "$work/bundle"
   tar -xzf "$archive" -C "$work/bundle" --no-same-owner --no-same-permissions \
     --no-xattrs --no-acls --no-fflags || fail 'Archive extraction failed.'
   bundle="$work/bundle"
-  [ -x "$bundle/bin/deckard" ] && [ -d "$bundle/lib" ] &&
+  [ -x "$bundle/bin/deckard" ] &&
     [ -d "$bundle/share/licenses" ] && [ -f "$bundle/extension/manifest.json" ] &&
-    [ -f "$bundle/models/packed.safetensors" ] && [ -f "$bundle/models/tokenizer.json" ] ||
+    [ -f "$bundle/models/model.mlpackage/Manifest.json" ] &&
+    [ -f "$bundle/models/model.mlpackage/Data/com.apple.CoreML/model.mlmodel" ] &&
+    [ -f "$bundle/models/model.mlpackage/Data/com.apple.CoreML/weights/weight.bin" ] &&
+    [ -f "$bundle/models/tokenizer.json" ] ||
     fail 'Release archive is missing required files.'
   "$bundle/bin/deckard" "${native_options[@]}" --model-dir "$bundle/models" \
     --extension-dir "$bundle/extension" --shell "$shell_choice"

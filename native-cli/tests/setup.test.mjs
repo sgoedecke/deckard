@@ -5,10 +5,11 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { version } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const model = process.env.DECKARD_MODEL_DIR;
-const available = !!model && fs.existsSync(path.join(model, "packed.safetensors"));
+const available = !!model && fs.existsSync(path.join(model, "model.mlpackage/Manifest.json"));
 const extension = fileURLToPath(new URL("../../extension", import.meta.url));
 const manifestName = "com.sgoedecke.deckard.json";
 const key = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"))).key;
@@ -36,23 +37,24 @@ function fixture(t, shell = "zsh") {
 
 function installPrevious(f) {
   return spawnSync(process.env.DECKARD_PREVIOUS_BIN,
-    ["install", "--home", f.home, "--model-dir", model, "--extension-dir", extension,
+    ["install", "--home", f.home, "--model-dir", process.env.DECKARD_PREVIOUS_MODEL_DIR, "--extension-dir", extension,
       "--manifest-dir", f.manifests], { encoding: "utf8", timeout: 30000, env: f.env });
 }
 
-test("Deckard 0.4.0 upgrades in place and both release versions uninstall together",
-  { skip: !available || !process.env.DECKARD_PREVIOUS_BIN }, t => {
+test("the previous MLX release upgrades in place and both versions uninstall together",
+  { skip: !available || !process.env.DECKARD_PREVIOUS_BIN || !process.env.DECKARD_PREVIOUS_MODEL_DIR }, t => {
     const f = fixture(t);
     const original = "export PERSONAL=kept";
     fs.writeFileSync(f.profile, original);
     const previous = installPrevious(f);
     assert.equal(previous.status, 0, previous.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.4.0");
+    assert.ok(["0.4.0", "0.4.1", "0.5.0"].includes(
+      JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version));
     const profile = fs.readFileSync(f.profile, "utf8");
     const inode = fs.statSync(path.join(f.home, ".install.lock")).ino;
     const upgraded = f.install();
     assert.equal(upgraded.status, 0, upgraded.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, "0.5.0");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "current/install.json"))).version, version);
     assert.equal(fs.readFileSync(f.profile, "utf8"), profile);
     assert.equal(fs.readdirSync(path.join(f.home, "releases")).length, 2);
     const removed = f.run("uninstall");
@@ -197,8 +199,8 @@ test("corrupt model cannot activate or change profile and extension", { skip: !a
   const before = fs.readFileSync(f.profile);
   const current = fs.readlinkSync(path.join(f.home, "current"));
   const bad = path.join(f.root, "bad model");
-  fs.mkdirSync(bad);
-  fs.writeFileSync(path.join(bad, "packed.safetensors"), "corrupt");
+  fs.mkdirSync(path.join(bad, "model.mlpackage/Data/com.apple.CoreML"), { recursive: true });
+  fs.writeFileSync(path.join(bad, "model.mlpackage/Data/com.apple.CoreML/model.mlmodel"), "corrupt");
   const result = f.run("install", ["--model-dir", bad, "--extension-dir", extension]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /asset_mismatch/);
@@ -292,8 +294,8 @@ test("interrupted uninstall resumes after PATH removal and partial extension del
   assert.equal(f.run("uninstall").status, 0);
 });
 
-for (const previous of [false, true]) test(`interrupted final release-directory removal validates saved ownership (${previous ? "0.4.0" : "current"})`,
-  { skip: !available || (previous && !process.env.DECKARD_PREVIOUS_BIN) }, t => {
+for (const previous of [false, true]) test(`interrupted final release-directory removal validates saved ownership (${previous ? "legacy MLX" : "current"})`,
+  { skip: !available || (previous && (!process.env.DECKARD_PREVIOUS_BIN || !process.env.DECKARD_PREVIOUS_MODEL_DIR)) }, t => {
   const f = fixture(t);
   const installed = previous ? installPrevious(f) : f.install(["--shell", "none"]);
   assert.equal(installed.status, 0, installed.stderr);

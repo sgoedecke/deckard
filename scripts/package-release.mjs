@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { validatePins, verifyAssets, copyAssets, sha256, checkArchiveSize } from './release-assets.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const version = '0.5.0';
+const version = '0.6.0';
 const archiveName = `deckard-v${version}-macos-arm64.tar.gz`;
 const options = { '--native-dist': path.join(root, 'native-cli/build/dist'), '--output-dir': path.join(root, `dist/v${version}`) };
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -19,11 +18,6 @@ for (let i = 2; i < process.argv.length; i += 2) {
 if (!options['--model-dir']) throw new Error('--model-dir is required; the canonical model is read-only.');
 if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Packaging requires Apple Silicon macOS.');
 const run = (command, args) => execFileSync(command, args, { stdio: 'inherit', env: { ...process.env, COPYFILE_DISABLE: '1', LC_ALL: 'C' } });
-async function sha256(file) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
-}
 async function tree(directory, prefix = '') {
   const entries = [];
   for (const name of (await fs.readdir(directory)).sort()) {
@@ -37,17 +31,12 @@ async function tree(directory, prefix = '') {
   }
   return entries;
 }
-const modelHashes = {
-  'packed.safetensors': '85a9e02ebdcbbe1dd84cdbf893b708e44ee4691cadc7e1a4780039e22097ac98',
-  'tokenizer.json': '4b4f60231058db4b5794e7b124bb7945bc8ade6719282de4d2e0372ee527b929',
-};
-for (const [name, expected] of Object.entries(modelHashes)) {
-  const source = path.join(options['--model-dir'], name);
-  if (!(await fs.lstat(source)).isFile() || await sha256(source) !== expected) throw new Error(`Canonical model checksum mismatch: ${name}`);
-}
+const pinsContent = await fs.readFile(path.join(root, 'native-cli/model-assets.json'), 'utf8');
+const modelHashes = validatePins(JSON.parse(pinsContent));
+await verifyAssets(options['--model-dir'], modelHashes);
 const native = options['--native-dist'];
 await tree(native);
-for (const required of ['bin/deckard', 'lib/libmlx.dylib', 'lib/mlx.metallib', 'share/licenses/MLX-LICENSE', 'share/licenses/NLOHMANN-LICENSE', 'share/licenses/Cargo.lock', 'share/licenses/rust-stdlib/COPYRIGHT-library.html']) {
+for (const required of ['bin/deckard', 'share/licenses/NLOHMANN-LICENSE', 'share/licenses/Cargo.lock', 'share/licenses/rust-stdlib/COPYRIGHT-library.html']) {
   if (!(await fs.stat(path.join(native, required))).isFile()) throw new Error(`Missing native distribution file: ${required}`);
 }
 const nativeVersion = execFileSync(path.join(native, 'bin/deckard'), ['--version'], { encoding: 'utf8' }).trim();
@@ -63,7 +52,11 @@ try {
   const bundle = path.join(staging, 'bundle');
   await fs.mkdir(path.join(bundle, 'bin'), { recursive: true });
   await fs.copyFile(path.join(native, 'bin/deckard'), path.join(bundle, 'bin/deckard'));
-  for (const name of ['lib', 'share']) await fs.cp(path.join(native, name), path.join(bundle, name), { recursive: true });
+  await fs.cp(path.join(native, 'share/licenses'), path.join(bundle, 'share/licenses'), {
+    recursive: true,
+    filter: source => path.basename(source) !== 'MLX-LICENSE',
+  });
+  await fs.writeFile(path.join(bundle, 'share/licenses/model-assets.json'), pinsContent);
   await fs.cp(path.join(root, 'extension'), path.join(bundle, 'extension'), {
     recursive: true,
     filter: source => !['tests', '.DS_Store'].includes(path.basename(source)),
@@ -71,7 +64,7 @@ try {
   const manifest = JSON.parse(await fs.readFile(path.join(bundle, 'extension/manifest.json'), 'utf8'));
   if (manifest.name !== 'Deckard' || manifest.version !== version) throw new Error('Extension branding/version does not match release.');
   await fs.mkdir(path.join(bundle, 'models'));
-  for (const name of Object.keys(modelHashes)) await fs.copyFile(path.join(options['--model-dir'], name), path.join(bundle, 'models', name));
+  await copyAssets(options['--model-dir'], path.join(bundle, 'models'), modelHashes);
   await fs.copyFile(path.join(root, 'LICENSE'), path.join(bundle, 'share/licenses/DECKARD-LICENSE'));
   await fs.cp(path.join(root, 'docs/licenses'), path.join(bundle, 'share/licenses/models'), { recursive: true });
   await fs.copyFile(path.join(root, 'docs/MODEL-ATTRIBUTION.md'), path.join(bundle, 'share/licenses/MODEL-ATTRIBUTION.md'));
@@ -97,6 +90,7 @@ try {
     '--no-xattrs', '--no-acls', '--no-fflags', '-cf', tarFile, '-C', bundle, '-T', fileList]);
   run('/usr/bin/gzip', ['-n', '-9', tarFile]);
   const archive = path.join(staging, archiveName);
+  const archiveBytes = checkArchiveSize((await fs.stat(archive)).size);
   const digest = await sha256(archive);
   const template = await fs.readFile(path.join(root, 'install.sh'), 'utf8');
   if (template.split('@ARCHIVE_SHA256@').length !== 2) throw new Error('Installer template must contain exactly one digest placeholder.');
@@ -105,7 +99,7 @@ try {
   const installerDigest = await sha256(path.join(staging, 'install.sh'));
   await fs.writeFile(path.join(staging, 'SHA256SUMS'), `${digest}  ${archiveName}\n${installerDigest}  install.sh\n`);
   for (const name of [archiveName, 'install.sh', 'SHA256SUMS']) await fs.rename(path.join(staging, name), path.join(out, name));
-  console.log(`Packaged ${path.join(out, archiveName)}\nSHA-256: ${digest}\nAd-hoc signatures verified. Not notarized. No release was published.`);
+  console.log(`Packaged ${path.join(out, archiveName)}\nArchive bytes: ${archiveBytes} (under 2147483648)\nSHA-256: ${digest}\nAd-hoc signatures verified. Not notarized. No release was published.`);
 } finally {
   await fs.rm(staging, { recursive: true, force: true });
 }

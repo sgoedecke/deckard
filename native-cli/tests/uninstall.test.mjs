@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assets, canonicalJson, installationMetadata, version as currentVersion } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const host = "com.sgoedecke.deckard";
@@ -12,12 +13,13 @@ const write = (file, contents = "owned") => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
 };
-function fixture(t, version = "0.5.0") {
+function fixture(t, version = currentVersion) {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".uninstall-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "application with spaces");
   const manifests = path.join(root, "native manifests");
-  const owned = ["0.4.0", "0.4.1", "0.5.0"].includes(version);
+  const owned = ["0.4.0", "0.4.1", "0.5.0", currentVersion].includes(version);
+  const coreml = version === currentVersion;
   const hostName = owned ? host : "com.example.other";
   const registration = path.join(manifests, `${hostName}.json`);
   const userHome = path.join(root, "user");
@@ -25,7 +27,7 @@ function fixture(t, version = "0.5.0") {
   const run = (args = [], env = {}) => spawnSync(binary,
     ["uninstall", "--home", home, "--manifest-dir", manifests, ...args],
     { encoding: "utf8", timeout: 10000, env: { ...process.env, HOME: userHome, ...env } });
-  const config = {
+  const config = coreml ? installationMetadata() : {
     format: 1, product: "Deckard", version, model: "ShantanuT01/gradient-ai-text-detector",
     revision: "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
     policy: version === "0.5.0" ? "gradient-q4-two-scale-v1" : "gradient-q4-composite-v1-retrospective",
@@ -38,13 +40,14 @@ function fixture(t, version = "0.5.0") {
   const licenses = config.license_files;
   if (!owned) delete config.product;
   const cli = owned ? "deckard" : "other-app";
-  const sorted = JSON.stringify(Object.fromEntries(Object.keys(config).sort().map(key => [key, config[key]])));
+  const sorted = canonicalJson(config);
   const name = `${config.version}-${createHash("sha256").update(sorted).digest("hex").slice(0, 20)}`;
   const release = path.join(home, "releases", name);
   function install() {
     write(path.join(release, "install.json"), sorted);
-    for (const file of [`bin/${cli}`, "lib/libmlx.dylib", "lib/mlx.metallib",
-      "models/packed.safetensors", "models/tokenizer.json", ...licenses])
+    const payload = coreml ? Object.keys(assets.files).map(name => `models/${name}`) :
+      ["lib/libmlx.dylib", "lib/mlx.metallib", "models/packed.safetensors", "models/tokenizer.json"];
+    for (const file of [`bin/${cli}`, ...payload, ...licenses])
       write(path.join(release, file));
     fs.symlinkSync(cli, path.join(release, `bin/${cli}-host`));
     fs.symlinkSync(`releases/${name}`, path.join(home, "current"));
@@ -66,8 +69,8 @@ test("absent uninstall is idempotent and creates no directories", t => {
   }
 });
 
-test("uninstall still recognizes positively owned Deckard 0.4.0 releases", t => {
-  const f = fixture(t, "0.4.0");
+for (const version of ["0.4.0", "0.4.1", "0.5.0"]) test(`uninstall still recognizes positively owned Deckard ${version} releases`, t => {
+  const f = fixture(t, version);
   f.install();
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);

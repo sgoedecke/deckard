@@ -1,0 +1,6 @@
+#pragma once
+
+namespace aihider {
+inline constexpr const char* model_assets_json = R"deckard_assets(@MODEL_ASSETS_JSON@)deckard_assets";
+inline constexpr const char* model_assets_sha256 = "@MODEL_ASSETS_SHA256@";
+}

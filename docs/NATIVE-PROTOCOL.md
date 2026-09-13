@@ -1,6 +1,7 @@
-# Deckard 0.5.0 native messaging protocol v3 (Gradient)
+# Deckard 0.6.0 native messaging protocol v3 (Gradient)
 
-Implemented by `native-cli/`; release users need no Python runtime.
+Implemented by `native-cli/`; release users need no Python, torch, or Xcode.
+This describes the v0.6.0 Core ML release contract.
 
 Host name: `com.sgoedecke.deckard`. Chrome launches `deckard start` for the service
 worker's `connectNative` port; this is a stdio host, not an HTTP daemon.
@@ -11,7 +12,40 @@ contains error codes without page text.
 The implementation limits incoming frames to 4 MiB; responses remain below Chrome's 1 MiB limit.
 It accepts only the documented fields. Malformed frames produce an error and
 close the host; well-framed invalid requests produce an error reply.
-EOF on stdin releases the process and its model/cache.
+EOF on stdin releases the process, its resident model, and its in-memory score
+cache. The on-disk compiled-model cache persists across host lifetimes.
+
+## Runtime and assets
+
+Production metadata reports `runtime: "native-coreml"` and
+`scheduling: "default"`. The extension accepts both default scheduling and
+legacy `background` metadata during upgrades; this does not change the new
+helper's scheduling policy. Reload the installed extension at
+`chrome://extensions` after upgrading so its updated protocol validation is
+active. Public Core ML `CPU_AND_NE`
+(`MLComputeUnitsCPUAndNeuralEngine`) limits execution to CPU and Neural Engine.
+There are no private ANE hooks or silent GPU fallback. Failure to verify,
+compile, or load the model is surfaced as an error, never an alternate backend.
+
+The model is a single resident, fixed-512-token FP16 package derived from the
+decoded canonical q4 weights. FP16 does not restore original FP32 weights or
+mean 4-bit ANE arithmetic. The tokenizer, scoring policy, protocol version and
+reference cutoff remain unchanged; policy identity is still
+`gradient-q4-two-scale-v1`.
+
+`deckard install --model-dir DIR` and `deckard verify --model DIR` take a
+directory containing `model.mlpackage/` and `tokenizer.json`. The package's
+`Manifest.json`, `Data/com.apple.CoreML/model.mlmodel`,
+`Data/com.apple.CoreML/weights/weight.bin`, and the tokenizer are SHA-256-pinned
+by `native-cli/model-assets.json` at build time. A release may include a copy
+under `share/licenses/model-assets.json` for installed provenance; runtime verification uses
+embedded pins, not mutable pins from that sidecar.
+
+The first actual model use compiles and loads locally. Later starts reuse a
+validated compiled artifact in `~/Library/Caches/Deckard/coreml`, keyed by model
+artifact, macOS build, and hardware. This is separate from the bounded
+in-memory score cache below and contains no page text. Installation and ping
+do not require inference. The host keeps one model loaded until it exits.
 
 ## Extension page authorization
 
@@ -36,8 +70,9 @@ sender/run and requested URL; the tab URL is rechecked after the probe. A stale
 request cannot replace a newer run. Off, permission revocation, and navigation
 invalidate pending authorizations. No additional permissions are required.
 Old helpers, extensions and content scripts must be updated/reloaded together.
-The model weights and 50-word minimum are unchanged; the two-scale policy defaults
-to 0.97. Existing explicitly saved thresholds remain unchanged.
+The 50-word minimum and two-scale policy are unchanged; the policy defaults
+to 0.97. The Core ML package retains the canonical q4-derived model lineage,
+with FP16 computation. Existing explicitly saved thresholds remain unchanged.
 
 ## Requests
 
@@ -50,8 +85,9 @@ IDs are nonempty strings up to 128 characters.
 Ping does not load the model. The response reports runtime version, model
 revision, whether a model is loaded, scheduling configuration, and input limits.
 `ready` confirms the protocol/runtime installation, not a completed inference.
-Full asset hashes are checked before the first tokenizer/model load or with
-`deckard status`, not on lightweight ping requests.
+The tokenizer hash is checked before tokenization; all model asset hashes are
+checked before the first model/cache load or with `deckard status`, not on
+lightweight ping or tokenizer-only planning requests.
 
 ```json
 {"id":"block-1","type":"analyze","protocol_version":3,"text":"A passage of at least 50 words..."}
@@ -60,7 +96,9 @@ Full asset hashes are checked before the first tokenizer/model load or with
 The text is limited to 20,000 Unicode characters. The host counts whitespace-
 separated words and tokenizes the original text.
 It scores at most four balanced windows of 510 content tokens each. Windows
-have Gradient CLS=1 and SEP=2 added separately; no fixed-length padding is used.
+have Gradient CLS=1 and SEP=2 added separately. The Core ML runtime right-pads
+shorter windows to 512 positions with an attention mask; padding does not
+change reported token counts or the 510-content-token window policy.
 Missing or incompatible protocol versions fail closed with
 `extension_update_required`.
 
@@ -185,4 +223,5 @@ The extension owns a serialized queue and sends at most one analysis at a time.
 It can drop queued requests and ignore stale results after navigation or text
 changes. Disconnecting the native port terminates the connection; Chrome owns
 the child process lifetime. An in-flight operation may briefly finish before the
-disconnect is observed. Reconnecting creates a new host and cache.
+disconnect is observed. Reconnecting creates a new host and in-memory score
+cache, reusing the validated disk compilation cache when compatible.

@@ -1,6 +1,6 @@
 #include "support.hpp"
 #include "host.hpp"
-#include "gradient.hpp"
+#include "coreml_gradient.hpp"
 #include "tokenizer.hpp"
 #include "setup.hpp"
 #include <algorithm>
@@ -31,8 +31,8 @@ struct Options {
 Options options(int argc, char** argv, int start) {
     const std::set<std::string> values{"--home", "--extension-id", "--manifest-dir", "--model-dir",
                                       "--file", "--model", "--fixtures", "--output", "--source",
-                                      "--extension-dir", "--shell"};
-    const std::set<std::string> flags{"--replace", "--no-register", "--no-extension", "--eager"};
+                                      "--extension-dir", "--shell", "--cache-dir"};
+    const std::set<std::string> flags{"--replace", "--no-register", "--no-extension"};
     Options result;
     for (int i = start; i < argc; ++i) {
         std::string key = argv[i];
@@ -101,7 +101,7 @@ struct Removal {
 };
 Removal validate_release(const fs::path& release);
 bool owned_release_version(const Json& version) {
-    return version == app_version || version == "0.4.0" || version == "0.4.1";
+    return version == app_version || version == "0.5.0" || version == "0.4.0" || version == "0.4.1";
 }
 fs::path installation_prefix() {
     auto distribution = executable_path().parent_path().parent_path();
@@ -135,14 +135,16 @@ void install(const Options& options) {
     if (!extension_id_valid(id))
         throw Error("extension_id", "Pass --extension-id with the 32-letter ID from chrome://extensions, or use --no-register.");
     Json manifest = {
-        {"name", host_name}, {"description", "Deckard native Gradient MLX (experimental marking)"},
+        {"name", host_name}, {"description", "Deckard native Gradient Core ML (experimental marking)"},
         {"path", (prefix / "current/bin/deckard-host").string()}, {"type", "stdio"},
         {"allowed_origins", Json::array({"chrome-extension://" + id + "/"})},
     };
     std::optional<Json> previous_manifest;
     if (path_present(registration)) {
         previous_manifest = read_json(registration);
-        if (*previous_manifest != manifest) {
+        auto comparable = *previous_manifest;
+        if (comparable.is_object()) comparable["description"] = manifest["description"];
+        if (comparable != manifest) {
             if (!options.has("--replace") || previous_manifest->value("name", Json()) != host_name ||
                 previous_manifest->value("path", Json()) != manifest["path"] ||
                 previous_manifest->value("type", Json()) != "stdio")
@@ -176,35 +178,32 @@ void install(const Options& options) {
     auto runtime = stage.path / "runtime";
     fs::create_directory(runtime);
     fs::create_directory(runtime / "bin");
-    fs::create_directory(runtime / "lib");
     fs::create_directory(runtime / "models");
     copy_checked(executable, runtime / "bin/deckard");
     fs::permissions(runtime / "bin/deckard", fs::perms::owner_all);
     fs::create_symlink("deckard", runtime / "bin/deckard-host");
-    copy_checked(distribution / "lib/libmlx.dylib", runtime / "lib/libmlx.dylib");
-    copy_checked(distribution / "lib/mlx.metallib", runtime / "lib/mlx.metallib");
     if (!fs::is_directory(distribution / "share/licenses")) throw Error("missing_bundle", "Distribution license notices are missing.");
     fs::create_directory(runtime / "share");
     fs::copy(distribution / "share/licenses", runtime / "share/licenses", fs::copy_options::recursive);
     fs::path source = options.has("--model-dir") ? fs::absolute(options.get("--model-dir")) : distribution / "models";
-    require_hash(source / "packed.safetensors", packed_sha);
-    require_hash(source / "tokenizer.json", tokenizer_sha);
-    copy_checked(source / "packed.safetensors", runtime / "models/packed.safetensors");
-    copy_checked(source / "tokenizer.json", runtime / "models/tokenizer.json");
+    verify_model_assets(source);
+    for (auto it = model_assets().at("files").begin(); it != model_assets().at("files").end(); ++it) {
+        const auto destination = runtime / "models" / it.key();
+        fs::create_directories(destination.parent_path());
+        copy_checked(source / it.key(), destination);
+    }
     Tokenizer tokenizer(runtime / "models/tokenizer.json");
     auto probe = tokenizer.wrap(tokenizer.encode("Native Gradient installation."));
     if (probe.size() < 3 || probe.front() != 1 || probe.back() != 2)
         throw Error("tokenizer_mismatch", "The tokenizer does not have Gradient's expected special tokens.");
-    require_hash(runtime / "models/packed.safetensors", packed_sha);
-    require_hash(runtime / "models/tokenizer.json", tokenizer_sha);
+    verify_model_assets(runtime / "models");
     Json config = {
         {"format", 1}, {"product", "Deckard"}, {"version", app_version}, {"model", model_id}, {"revision", revision},
         {"policy", policy_id}, {"flag_threshold", flag_threshold}, {"experimental", true},
         {"extension_id", id}, {"weights_sha256", packed_sha}, {"tokenizer_sha256", tokenizer_sha},
-        {"source", "verified-packed-export"},
+        {"source", "verified-coreml-export"}, {"runtime", runtime_id},
+        {"model_assets_sha256", model_assets_id()}, {"model_files", model_assets().at("files")},
         {"binary_sha256", sha256(runtime / "bin/deckard")},
-        {"mlx_sha256", sha256(runtime / "lib/libmlx.dylib")},
-        {"metal_sha256", sha256(runtime / "lib/mlx.metallib")},
         {"threshold_notice", "Experimental score, not a probability; browsing false positives are not independently validated."},
     };
     config["license_files"] = Json::array();
@@ -223,9 +222,7 @@ void install(const Options& options) {
     if (path_present(release)) {
         validate_release(release);
         if (installed_config(release, true) != config ||
-            sha256(release / "bin/deckard") != config["binary_sha256"].get<std::string>() ||
-            sha256(release / "lib/libmlx.dylib") != config["mlx_sha256"].get<std::string>() ||
-            sha256(release / "lib/mlx.metallib") != config["metal_sha256"].get<std::string>())
+            sha256(release / "bin/deckard") != config["binary_sha256"].get<std::string>())
             throw Error("release_conflict", "An existing release is inconsistent; it was not overwritten.");
         for (auto it = config["license_sha256"].begin(); it != config["license_sha256"].end(); ++it)
             require_hash(release / it.key(), it.value().get<std::string>());
@@ -318,18 +315,30 @@ Removal validate_release(const fs::path& release) {
     if (fs::symlink_status(metadata).type() != fs::file_type::regular)
         uninstall_conflict("Release ownership metadata is missing or redirected: " + release.string() + ".");
     auto config = read_json(metadata);
+    if (!config.is_object())
+        uninstall_conflict("Release ownership metadata must be an object.");
+    const bool coreml = config.value("version", Json()) == app_version;
+    const bool two_scale = coreml || config.value("version", Json()) == "0.5.0";
     if (!config.is_object() || config.value("format", Json()) != 1 ||
         config.value("product", Json()) != "Deckard" || !owned_release_version(config.value("version", Json())) ||
         config.value("model", Json()) != model_id || config.value("revision", Json()) != revision ||
-        config.value("policy", Json()) != (config.value("version", Json()) == app_version
+        config.value("policy", Json()) != (two_scale
             ? policy_id : "gradient-q4-composite-v1-retrospective") ||
-        config.value("flag_threshold", Json()) != (config.value("version", Json()) == app_version
+        config.value("flag_threshold", Json()) != (two_scale
             ? flag_threshold : 0.9824231167326641) ||
         config.value("experimental", Json()) != true ||
         !config.value("extension_id", Json()).is_string() ||
-        config.value("source", Json()) != "verified-packed-export")
+        config.value("source", Json()) != (coreml ? "verified-coreml-export" : "verified-packed-export"))
         uninstall_conflict("This directory is not a Deckard installation: " + release.string() + ".");
-    for (const auto* field : {"weights_sha256", "tokenizer_sha256", "binary_sha256", "mlx_sha256", "metal_sha256"}) {
+    if (coreml && (config.value("runtime", Json()) != runtime_id ||
+        config.value("model_assets_sha256", Json()) != model_assets_id() ||
+        config.value("model_files", Json()) != model_assets().at("files") ||
+        config.value("weights_sha256", Json()) != packed_sha ||
+        config.value("tokenizer_sha256", Json()) != tokenizer_sha))
+        uninstall_conflict("The Core ML release asset inventory is incompatible.");
+    std::vector<std::string> digests{"weights_sha256", "tokenizer_sha256", "binary_sha256"};
+    if (!coreml) { digests.push_back("mlx_sha256"); digests.push_back("metal_sha256"); }
+    for (const auto& field : digests) {
         auto value = config.value(field, Json());
         if (!value.is_string() || value.get<std::string>().size() != 64 ||
             value.get<std::string>().find_first_not_of("0123456789abcdef") != std::string::npos)
@@ -339,10 +348,20 @@ Removal validate_release(const fs::path& release) {
     if (release.filename() != expected)
         uninstall_conflict("Release name does not match its native ownership metadata: " + release.string() + ".");
     const std::string binary = "deckard";
-    Removal removal{release, {
-        "bin/" + binary, "bin/" + binary + "-host", "lib/libmlx.dylib", "lib/mlx.metallib",
-        "models/packed.safetensors", "models/tokenizer.json",
-    }, {"bin", "lib", "models", "share", "share/licenses"}};
+    Removal removal{release, {"bin/" + binary, "bin/" + binary + "-host"},
+        {"bin", "models", "share", "share/licenses"}};
+    if (coreml) {
+        for (auto it = model_assets().at("files").begin(); it != model_assets().at("files").end(); ++it) {
+            const auto file = fs::path("models") / it.key();
+            removal.files.insert(file);
+            for (auto parent = file.parent_path(); !parent.empty(); parent = parent.parent_path())
+                removal.directories.insert(parent);
+        }
+    } else {
+        removal.files.insert({"lib/libmlx.dylib", "lib/mlx.metallib",
+            "models/packed.safetensors", "models/tokenizer.json"});
+        removal.directories.insert("lib");
+    }
     if (config.contains("license_files")) {
         if (!config["license_files"].is_array())
             uninstall_conflict("Invalid license inventory: " + release.string() + ".");
@@ -432,7 +451,7 @@ void uninstall(const Options& options) {
                     uninstall_conflict("Interrupted release cleanup does not match its saved ownership record.");
                 removals.push_back({entry.path(), {}, {}});
             } else if ((entry.is_directory() && present(entry.path() / "install.json")) ||
-                name.rfind("0.4.0-", 0) == 0 || name.rfind("0.4.1-", 0) == 0 ||
+                name.rfind("0.4.0-", 0) == 0 || name.rfind("0.4.1-", 0) == 0 || name.rfind("0.5.0-", 0) == 0 ||
                 name.rfind(std::string(app_version) + "-", 0) == 0)
                 removals.push_back(validate_release(entry.path()));
             else std::cout << "Retaining unrecognized release entry: " << entry.path() << '\n';
@@ -510,18 +529,22 @@ void uninstall(const Options& options) {
               << "Reload Chrome to close any running host. Other extensions and shell settings are untouched.\n";
 }
 void verify(const Options& options) {
-    allow_options(options, {"--model", "--fixtures", "--output", "--eager"});
+    allow_options(options, {"--model", "--fixtures", "--output", "--cache-dir"});
     if (!options.has("--model") || !options.has("--fixtures"))
         throw Error("arguments", "verify requires --model and --fixtures.");
-    background();
+    if (options.has("--output") && path_present(options.get("--output")))
+        throw Error("output_exists", "Preserve the existing verification receipt.");
+    default_priority();
     auto fixtures = read_json(options.get("--fixtures"), 4 * 1024 * 1024);
     if (!fixtures.is_object() || !fixtures.contains("cases") || !fixtures["cases"].is_array() || fixtures["cases"].empty())
         throw Error("fixtures", "Expected nonempty reference cases.");
     auto started = std::chrono::steady_clock::now();
-    Gradient model(options.get("--model"), !options.has("--eager"));
+    CoreMLGradient model(options.get("--model"),
+        options.has("--cache-dir") ? fs::absolute(options.get("--cache-dir")) : model_cache());
     double load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     Json rows = Json::array();
     double logit_error = 0, score_error = 0;
+    bool same_decisions = true;
     for (const auto& item : fixtures["cases"]) {
         auto ids = item.at("feed").at("input_ids").get<std::vector<std::vector<uint32_t>>>();
         auto mask = item.at("feed").at("attention_mask").get<std::vector<std::vector<uint32_t>>>();
@@ -532,19 +555,21 @@ void verify(const Options& options) {
         double expected = item.at("logit").get<double>();
         logit_error = std::max(logit_error, std::abs(value - expected));
         score_error = std::max(score_error, std::abs(score - sigmoid(expected)));
-        rows.push_back({{"name", item.at("name")}, {"logit", value}, {"score", score}, {"elapsed_ms", elapsed}});
+        const bool same_decision = (score >= flag_threshold) == (sigmoid(expected) >= flag_threshold);
+        same_decisions = same_decisions && same_decision;
+        rows.push_back({{"name", item.at("name")}, {"logit", value}, {"score", score},
+            {"elapsed_ms", elapsed}, {"same_default_decision", same_decision}});
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    bool passed = logit_error <= 0.03 && score_error <= 0.002;
-    auto memory = model.memory();
+    bool passed = score_error <= 0.002 && same_decisions;
     Json result = {{"status", passed ? "complete" : "failed"}, {"cases", rows},
                    {"max_logit_error", logit_error}, {"max_score_error", score_error}, {"load_ms", load},
-                   {"mlx_active_bytes", memory.active_bytes}, {"mlx_cache_bytes", memory.cache_bytes},
-                   {"mlx_peak_bytes", memory.peak_bytes}, {"compiled", memory.compiled},
-                   {"weights_sha256", sha256(options.get("--model"))},
+                   {"same_default_decisions", same_decisions}, {"score_tolerance", 0.002},
+                   {"runtime", runtime_id}, {"scheduling", "default"},
+                   {"compute_units", "cpu_and_neural_engine"}, {"model_assets_sha256", model_assets_id()},
+                   {"source_weights_sha256", packed_sha},
                    {"fixtures_sha256", sha256(options.get("--fixtures"))}};
     if (options.has("--output")) {
-        if (fs::exists(options.get("--output"))) throw Error("output_exists", "Preserve the existing verification receipt.");
         write_json(options.get("--output"), result);
     }
     std::cout << result.dump(2) << '\n';
@@ -552,12 +577,12 @@ void verify(const Options& options) {
 }
 void help() {
     std::cout <<
-        "Deckard 0.5.0 - native Gradient/MLX for Apple Silicon macOS15+\n\n"
+        "Deckard 0.6.0 - native Gradient/Core ML for Apple Silicon macOS15+\n\n"
         "deckard install [--extension-id ID] [--replace] [--model-dir DIR]\n"
         "                [--home DIR] [--manifest-dir DIR] [--no-register]\n"
         "                [--extension-dir DIR] [--shell zsh|bash|none] [--no-extension]\n"
         "  Install a self-contained native runtime and Chrome registration.\n"
-        "  Uses prebuilt packed model and extension from the release bundle by default.\n"
+        "  Uses the prebuilt Core ML model and extension from the release bundle by default.\n"
         "  The official extension ID is fixed; --extension-id explicitly overrides it.\n"
         "  --shell defaults to the login SHELL (zsh/bash); none leaves PATH alone.\n\n"
         "deckard uninstall [--home DIR] [--manifest-dir DIR]\n"
@@ -571,7 +596,7 @@ void help() {
         "deckard status [--home DIR]\n"
         "deckard scan [--home DIR] [--file FILE|-]\n"
         "  Score UTF-8 text from a file or stdin and print JSON; no page text is logged.\n\n"
-        "deckard verify --model FILE --fixtures FILE [--output FILE] [--eager]\n"
+        "deckard verify --model DIR --fixtures FILE [--output FILE] [--cache-dir DIR]\n"
         "deckard self-test\n";
 }
 }
@@ -606,7 +631,7 @@ int main(int argc, char** argv) {
             std::cout << Json{{"status", "installed"}, {"home", home_for(args).string()}, {"installation", config}}.dump(2) << '\n';
         } else if (command == "scan") {
             allow_options(args, {"--home", "--file"});
-            background();
+            default_priority();
             std::string text;
             if (args.get("--file", "-") == "-") {
                 char buffer[4096];

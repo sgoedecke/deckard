@@ -6,12 +6,15 @@ Named after the original AI hunter in _Blade Runner_, Deckard is a Chrome extens
 
 ## Getting started
 
-Install [Deckard v0.5.0](https://github.com/sgoedecke/deckard/releases/tag/v0.5.0)
+Install [Deckard v0.6.0](https://github.com/sgoedecke/deckard/releases/tag/v0.6.0)
 from your terminal:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.5.0/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/sgoedecke/deckard/releases/download/v0.6.0/install.sh | bash
 ```
+
+v0.6.0 uses Core ML on CPU/Apple Neural Engine instead of the previous
+MLX/Metal backend.
 
 In Chrome:
 
@@ -20,11 +23,26 @@ In Chrome:
    `~/Library/Application Support/Deckard/extension` 
 3. Pin Deckard so you can see it in your extension hotbar
 
+After an upgrade, use **Reload** on Deckard at `chrome://extensions` to
+activate the updated extension alongside the new native helper.
+
 Right now this only works on Apple Silicon macs. If you want to use it on a PC or some other device, PRs are welcome.
 
 ## How it works
 
-Deckard downloads and runs the [Gradient](docs/MODEL-ATTRIBUTION.md) model on your laptop. This will consume a few hundred MB of memory while you're browsing. When you visit a page, the extension will chunk it and run it through the local model.
+Deckard runs the [Gradient](docs/MODEL-ATTRIBUTION.md) model on your laptop. When you visit a page, the extension will chunk it and run it through the local model.
+
+The v0.6.0 release bundle includes the converted FP16 model (roughly 933 MiB
+before archive compression) and tokenizer as GitHub release assets, not a
+separate Hugging Face download. Production inference uses public Core ML
+`CPU_AND_NE` compute units and default scheduling: no GPU fallback or private
+ANE hooks. One compiled model remains resident for the native host's lifetime;
+memory usage depends on Core ML and the workload.
+
+First model use compiles locally and can take longer. Later starts reuse a
+validated compiled-model cache in `~/Library/Caches/Deckard/coreml`, keyed by
+the pinned artifact, macOS build, and hardware. End users need macOS 15 or
+newer on Apple Silicon, but no Python, torch, or Xcode.
 
 ## Limitations
 
@@ -54,20 +72,52 @@ npm test
 
 Extension tests need no npm dependencies. Native tests/builds require the native
 toolchain and fixtures; release users do not. On a supported Mac, with a
-prepared dependency cache and canonical quantized model directory:
+prepared Rust/JSON dependency cache and the pinned Core ML asset directory:
 
 ```sh
 NATIVE_CACHE=/path/to/native-build scripts/build-native.sh
-DECKARD_MODEL_DIR=/path/to/canonical/mlx-q4 npm run test:native
-scripts/package-release.sh --model-dir /path/to/canonical/mlx-q4
+DECKARD_MODEL_DIR=/path/to/coreml-assets npm run test:native
+scripts/package-release.sh --model-dir /path/to/coreml-assets
 ```
 
 The build reads the external dependency cache without modifying it. Packaging
 also accepts `--native-dist native-cli/build/dist` and
-`--output-dir dist/v0.5.0`. These are maintainer steps, not evidence that a
-release has been published. Release archives bundle prepared model assets;
-source installs must pass `--model-dir` explicitly. The installer does not
-download or convert upstream FP32 weights automatically.
+`--output-dir dist/v0.6.0`. `BUILD_DIR` overrides the build directory. The build
+refuses stale MLX distribution artifacts without deleting existing output;
+choose a fresh `BUILD_DIR` when migrating an old MLX build. Source
+builders need CMake and Apple's command-line developer tools; the bootstrap
+prepares pinned Rust/tokenizers and nlohmann JSON dependencies without an MLX
+SDK. An external `NATIVE_CACHE` must already contain those dependencies.
+`DECKARD_BOOTSTRAP_MLX=1 native-cli/bootstrap.sh` retains optional SDK acquisition
+for historical MLX research, not the production build.
+
+`--model-dir` is the directory **containing** `model.mlpackage/` and
+`tokenizer.json`, not the package itself. Packaging verifies every nested file
+against [`native-cli/model-assets.json`](native-cli/model-assets.json). It bundles
+the native executable, extension, model, tokenizer and license notices, with
+the pin manifest under `share/licenses/` as installed provenance; runtime trust is anchored in
+the pins embedded in the native binary, not an editable sidecar. No
+`packed.safetensors`, MLX libraries, Metal resource or MLX license is shipped.
+Every final release archive must be strictly under GitHub's 2 GiB asset limit;
+packaging reports its exact byte count and fails before publishing local outputs
+if that limit is exceeded.
+
+These are maintainer steps, not evidence that a release has been published.
+Packaging writes the archive, checksum-pinned `install.sh`, and `SHA256SUMS`
+locally; it never uploads a release. Source installs must pass `--model-dir`
+explicitly, for example:
+
+```sh
+native-cli/build/dist/bin/deckard install --model-dir /path/to/coreml-assets \
+  --extension-dir "$PWD/extension" --shell zsh
+native-cli/build/dist/bin/deckard verify --model /path/to/coreml-assets \
+  --fixtures /path/to/fixtures.json --output /path/to/new-receipt.json
+```
+
+The source installer template fails closed until packaging pins its archive
+checksum. Neither the installer nor the production CLI converts or downloads
+upstream FP32 weights. Maintainer conversion lives in the Python pipeline under
+`native-cli/coreml/`; Python is not part of the distribution.
 Without `DECKARD_MODEL_DIR`, native model-installation tests are explicitly
 skipped; protocol and ownership-refusal tests still run against the built CLI.
 The separately invoked `native-cli/tests/model-smoke.mjs` uses original synthetic
@@ -79,6 +129,14 @@ its manifest key gives ID `bkihjdkalohbkgnjjoobababhipefjdg`, so do not load bot
 
 See [native protocol](docs/NATIVE-PROTOCOL.md) for framing and model identity.
 Research datasets, experiment outputs and model weights are not committed.
+
+The [Core ML / Neural Engine research history](native-cli/coreml/README.md)
+retains the earlier split-model experiment, CPU/ANE-only native runners, and
+later resident-model measurements. Those historical MLX comparisons and
+background/private-scheduling experiments are not the production configuration.
+The v0.6.0 backend is a resident FP16 model derived from decoded q4 weights:
+it neither restores the original FP32 weights nor uses 4-bit ANE arithmetic.
+Protocol v3 and policy `gradient-q4-two-scale-v1` remain unchanged.
 
 ## License
 

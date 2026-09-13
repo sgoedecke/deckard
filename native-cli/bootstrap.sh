@@ -5,28 +5,37 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CACHE="${NATIVE_CACHE:-$ROOT/cache/native-build}"
 SDK="$CACHE/mlx-sdk"
 DOWNLOADS="$CACHE/downloads"
+WITH_MLX="${DECKARD_BOOTSTRAP_MLX:-0}"
+case "$WITH_MLX" in 0|1) ;; *) echo "DECKARD_BOOTSTRAP_MLX must be 0 or 1." >&2; exit 1 ;; esac
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) ;;
-  *) echo "The Gradient Metal runtime requires Apple Silicon macOS 15 or newer." >&2; exit 1 ;;
+  *) echo "The Gradient Core ML runtime requires Apple Silicon macOS 15 or newer." >&2; exit 1 ;;
 esac
 MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 15 ] || { echo "macOS 15 or newer is required." >&2; exit 1; }
 command -v cmake >/dev/null || { echo "Install CMake first (for example: brew install cmake)." >&2; exit 1; }
 xcrun --find clang++ >/dev/null
 if [ "$CACHE" != "$ROOT/cache/native-build" ]; then
-  for required in mlx-sdk/mlx/share/cmake/MLX/MLXConfig.cmake \
-    json/include/nlohmann/json.hpp cargo/registry \
+  for required in json/include/nlohmann/json.hpp cargo/registry \
     rustup/toolchains/1.90.0-aarch64-apple-darwin/bin/cargo \
-    licenses/MLX-LICENSE licenses/NLOHMANN-LICENSE; do
+    licenses/NLOHMANN-LICENSE; do
     [ -e "$CACHE/$required" ] || {
       echo "External NATIVE_CACHE is read-only and incomplete: $required" >&2
       exit 1
     }
   done
+  if [ "$WITH_MLX" = 1 ]; then
+    for required in mlx-sdk/mlx/share/cmake/MLX/MLXConfig.cmake licenses/MLX-LICENSE; do
+      [ -e "$CACHE/$required" ] || {
+        echo "External NATIVE_CACHE is read-only and incomplete: $required" >&2
+        exit 1
+      }
+    done
+  fi
   echo "Using existing read-only native dependencies in $CACHE"
   exit 0
 fi
-mkdir -p "$DOWNLOADS" "$SDK"
+mkdir -p "$DOWNLOADS"
 mkdir -p "$CACHE/json/include/nlohmann" "$CACHE/licenses"
 
 fetch() {
@@ -44,12 +53,14 @@ fetch() {
   [ "$actual" = "$expected" ] || { echo "Cached dependency checksum mismatch: $file" >&2; exit 1; }
 }
 
-# Wheels are upstream ZIP distribution containers. Extract only C++ headers,
-# native libraries and Metal resources: no Python bindings or interpreter.
+# Optional SDK for historical MLX research, never needed by production Core ML.
+if [ "$WITH_MLX" = 1 ]; then
+mkdir -p "$SDK"
 fetch 'https://files.pythonhosted.org/packages/79/ec/34f37376e26d537fadffb99af3a760d6545e37f5e1a30a552baadf237fc5/mlx_metal-0.32.2-py3-none-macosx_15_0_arm64.whl' \
   "$DOWNLOADS/mlx-metal.whl" 55a369250d220b2cf10213a87a2ac1b1a420608c5b35b1df4e7147ac8e32f121
 unzip -oq "$DOWNLOADS/mlx-metal.whl" 'mlx/include/*' 'mlx/share/*' 'mlx/lib/*' -d "$SDK"
 unzip -p "$DOWNLOADS/mlx-metal.whl" 'mlx_metal-0.32.2.dist-info/licenses/LICENSE' > "$CACHE/licenses/MLX-LICENSE"
+fi
 fetch 'https://raw.githubusercontent.com/nlohmann/json/9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03/single_include/nlohmann/json.hpp' \
   "$CACHE/json/include/nlohmann/json.hpp" 9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6
 fetch 'https://raw.githubusercontent.com/nlohmann/json/9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03/LICENSE.MIT' \

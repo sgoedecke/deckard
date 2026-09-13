@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { archiveSizeLimit, modelFiles } from "../scripts/release-assets.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const release = process.env.DECKARD_RELEASE_DIR;
@@ -20,8 +21,17 @@ test("real release archive installs, upgrades, uninstalls and reinstalls through
     const profile = path.join(user, ".zshrc");
     const original = "# unrelated settings\nexport PERSONAL_TEST_SETTING=preserved";
     fs.writeFileSync(profile, original);
-    const archiveName = "deckard-v0.5.0-macos-arm64.tar.gz";
+    const archiveName = "deckard-v0.6.0-macos-arm64.tar.gz";
     const archive = path.resolve(release, archiveName);
+    assert.ok(fs.statSync(archive).size < archiveSizeLimit);
+    const listing = spawnSync("/usr/bin/tar", ["-tzf", archive], {
+      encoding: "utf8", timeout: 120000, maxBuffer: 4 * 1024 * 1024,
+    });
+    assert.equal(listing.status, 0, listing.stderr);
+    const entries = new Set(listing.stdout.trim().split("\n"));
+    for (const name of modelFiles) assert.ok(entries.has(`models/${name}`), `Missing packaged asset: ${name}`);
+    assert.ok(entries.has("share/licenses/model-assets.json"));
+    assert.doesNotMatch(listing.stdout, /packed\.safetensors|libmlx\.dylib|mlx\.metallib|MLX-LICENSE/);
     const script = fs.readFileSync(path.join(release, "install.sh"), "utf8");
     const curlLog = path.join(scratch, "curl.log");
     fs.writeFileSync(path.join(commands, "curl"), `#!/bin/bash
@@ -35,7 +45,7 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-[ "$url" = "https://github.com/sgoedecke/deckard/releases/download/v0.5.0/${archiveName}" ]
+[ "$url" = "https://github.com/sgoedecke/deckard/releases/download/v0.6.0/${archiveName}" ]
 [ -n "$output" ]
 printf '%s\\n' "$url" >> "$CURL_LOG"
 cp "$RELEASE_ARCHIVE" "$output"
@@ -44,10 +54,10 @@ cp "$RELEASE_ARCHIVE" "$output"
       PATH: `${commands}:/usr/bin:/bin:/usr/sbin:/sbin`, RELEASE_ARCHIVE: archive, CURL_LOG: curlLog };
     delete env.DECKARD_HOME;
     const run = (command, args, input) => spawnSync(command, args, {
-      cwd: scratch, env, input, encoding: "utf8", timeout: 120000, maxBuffer: 1024 * 1024,
+      cwd: scratch, env, input, encoding: "utf8", timeout: 300000, maxBuffer: 1024 * 1024,
     });
     const hashes = spawnSync("/usr/bin/shasum", ["-a", "256", "-c", "SHA256SUMS"], {
-      cwd: release, encoding: "utf8", timeout: 30000,
+      cwd: release, encoding: "utf8", timeout: 120000,
     });
     assert.equal(hashes.status, 0, hashes.stderr);
     const denied = run("/bin/bash", ["-s", "--", "--no-open", "--shell", "zsh"], script);
@@ -66,7 +76,9 @@ cp "$RELEASE_ARCHIVE" "$output"
     const firstProfile = fs.readFileSync(profile, "utf8");
     const extension = JSON.parse(fs.readFileSync(path.join(prefix, "extension/manifest.json")));
     assert.equal(extension.name, "Deckard");
-    assert.equal(extension.version, "0.5.0");
+    assert.equal(extension.version, "0.6.0");
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(prefix, "current/share/licenses/model-assets.json"))),
+      JSON.parse(fs.readFileSync(path.join(root, "native-cli/model-assets.json"))));
     assert.deepEqual(JSON.parse(fs.readFileSync(registration)).allowed_origins,
       ["chrome-extension://bkihjdkalohbkgnjjoobababhipefjdg/"]);
     const status = run(binary, ["status"]);

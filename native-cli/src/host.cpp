@@ -1,5 +1,5 @@
 #include "host.hpp"
-#include "gradient.hpp"
+#include "coreml_gradient.hpp"
 #include "tokenizer.hpp"
 #include <algorithm>
 #include <chrono>
@@ -26,8 +26,15 @@ Json failure(const Json& id, const std::string& code, const std::string& message
 struct Analyzer::Impl {
     fs::path home;
     std::unique_ptr<Tokenizer> tokenizer;
-    std::unique_ptr<Gradient> model;
+    std::unique_ptr<CoreMLGradient> model;
     std::list<std::pair<std::string, Json>> cache;
+    void load_tokenizer() {
+        if (tokenizer) return;
+        installed_config(home, false);
+        const auto path = fs::canonical(home) / "models/tokenizer.json";
+        require_hash(path, tokenizer_sha);
+        tokenizer = std::make_unique<Tokenizer>(path);
+    }
 };
 Analyzer::Analyzer(fs::path home) : impl_(std::make_unique<Impl>()) { impl_->home = std::move(home); }
 Analyzer::~Analyzer() = default;
@@ -35,7 +42,7 @@ Json Analyzer::ping() {
     installed_config(impl_->home, false);
     Json result = identity();
     result.update({{"status", "ready"}, {"model_loaded", bool(impl_->model)},
-                   {"runtime", "native-mlx-0.32.2"}, {"scheduling", "background"},
+                   {"runtime", runtime_id}, {"scheduling", "default"},
                    {"max_chars", 20000}, {"max_chunks", 4}});
     return result;
 }
@@ -74,10 +81,7 @@ Json Analyzer::analyze(const std::string& text) {
             return result;
         }
     }
-    if (!impl_->tokenizer) {
-        installed_config(impl_->home, true);
-        impl_->tokenizer = std::make_unique<Tokenizer>(impl_->home / "models/tokenizer.json");
-    }
+    impl_->load_tokenizer();
     const auto ids = impl_->tokenizer->encode(text);
     const auto parts = windows(ids);
     Json chunks = Json::array();
@@ -87,7 +91,8 @@ Json Analyzer::analyze(const std::string& text) {
     for (size_t index = 0; index < parts.size(); ++index) {
         size_t chunk_words = words(impl_->tokenizer->decode(parts[index]));
         if (chunk_words < min_words) { short_chunk = true; continue; }
-        if (!impl_->model) impl_->model = std::make_unique<Gradient>(impl_->home / "models/packed.safetensors");
+        if (!impl_->model)
+            impl_->model = std::make_unique<CoreMLGradient>(fs::canonical(impl_->home) / "models", model_cache());
         auto tokens = impl_->tokenizer->wrap(parts[index]);
         double score = sigmoid(impl_->model->logit(tokens, std::vector<uint32_t>(tokens.size(), 1)));
         chunks.push_back({{"index", index}, {"score", score}, {"tokens", parts[index].size()}, {"words", chunk_words}});
@@ -112,10 +117,7 @@ Json Analyzer::analyze(const std::string& text) {
     return result;
 }
 Json Analyzer::plan(const Json& texts) {
-    if (!impl_->tokenizer) {
-        installed_config(impl_->home, true);
-        impl_->tokenizer = std::make_unique<Tokenizer>(impl_->home / "models/tokenizer.json");
-    }
+    impl_->load_tokenizer();
     Json groups = Json::array();
     size_t operations = 0;
     for (const auto& value : texts) {
@@ -228,7 +230,7 @@ void write_frame(std::ostream& stream, const Json& message) {
     if (!stream) throw Error("port_closed", "Native port closed.");
 }
 int serve(const fs::path& home) {
-    background();
+    default_priority();
     std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGALRM, deadline);
     Analyzer analyzer(home);
