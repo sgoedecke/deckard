@@ -127,6 +127,19 @@ void require_plain_path(const fs::path& path, bool directory, const std::string&
         }
     }
 }
+fs::path resolve_trusted_symlinks(const fs::path& path) {
+    const auto absolute = fs::absolute(path).lexically_normal();
+    fs::path current = absolute.root_path();
+    for (const auto& part : absolute.relative_path()) {
+        current /= part;
+        struct stat info {};
+        if (lstat(current.c_str(), &info) != 0 || !S_ISLNK(info.st_mode)) continue;
+        if (info.st_uid != getuid() && info.st_uid != 0)
+            conflict("Setup follows only symlinks owned by you or root: " + current.string() + ".");
+        current = fs::canonical(current);
+    }
+    return current;
+}
 void validate_prefix(const fs::path& prefix) {
     safe_string(prefix.string());
     if (prefix.string().find(':') != std::string::npos) conflict("The installation prefix cannot contain PATH separators (:).");

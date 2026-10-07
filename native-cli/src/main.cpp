@@ -131,6 +131,9 @@ void install(const Options& options) {
     fs::path manifest_dir = (options.has("--manifest-dir") ? fs::absolute(options.get("--manifest-dir")) :
         old_setup ? fs::path((*old_setup)["manifest_dir"].get<std::string>()) :
         user_home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts").lexically_normal();
+    // Setup metadata stores the resolved directory, so later runs compare and
+    // write real paths only.
+    manifest_dir = resolve_trusted_symlinks(manifest_dir);
     require_plain_path(manifest_dir, true);
     auto registration = manifest_dir / (std::string(host_name) + ".json");
     require_plain_path(registration, false);
@@ -412,6 +415,7 @@ void uninstall(const Options& options) {
         setup ? fs::path((*setup)["manifest_dir"].get<std::string>()) :
         user_home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts").lexically_normal();
     if (manifest_dir != manifest_dir.root_path() && manifest_dir.filename().empty()) manifest_dir = manifest_dir.parent_path();
+    manifest_dir = resolve_trusted_symlinks(manifest_dir);
     if (setup && (*setup)["manifest_dir"] != manifest_dir.string())
         uninstall_conflict("The supplied manifest directory differs from owned setup metadata.");
     plain_directory(manifest_dir);
