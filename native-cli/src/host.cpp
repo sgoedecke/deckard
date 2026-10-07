@@ -1,5 +1,5 @@
 #include "host.hpp"
-#include "coreml_gradient.hpp"
+#include "gradient_backend.hpp"
 #include "tokenizer.hpp"
 #include <algorithm>
 #include <chrono>
@@ -26,7 +26,7 @@ Json failure(const Json& id, const std::string& code, const std::string& message
 struct Analyzer::Impl {
     fs::path home;
     std::unique_ptr<Tokenizer> tokenizer;
-    std::unique_ptr<CoreMLGradient> model;
+    std::unique_ptr<ModelBackend> model;
     std::list<std::pair<std::string, Json>> cache;
     void load_tokenizer() {
         if (tokenizer) return;
@@ -92,7 +92,7 @@ Json Analyzer::analyze(const std::string& text) {
         size_t chunk_words = words(impl_->tokenizer->decode(parts[index]));
         if (chunk_words < min_words) { short_chunk = true; continue; }
         if (!impl_->model)
-            impl_->model = std::make_unique<CoreMLGradient>(fs::canonical(impl_->home) / "models", model_cache());
+            impl_->model = create_model_backend(fs::canonical(impl_->home) / "models", model_cache());
         auto tokens = impl_->tokenizer->wrap(parts[index]);
         double score = sigmoid(impl_->model->logit(tokens, std::vector<uint32_t>(tokens.size(), 1)));
         chunks.push_back({{"index", index}, {"score", score}, {"tokens", parts[index].size()}, {"words", chunk_words}});

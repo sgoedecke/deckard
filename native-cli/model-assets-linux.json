@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "runtime": "native-candle",
+  "model": "ShantanuT01/gradient-ai-text-detector",
+  "revision": "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
+  "source_weights_sha256": "87ecc3630d8dc2324c7a61e3448551cfa65732a3d27f24afbd2c94e0266b74b7",
+  "precision": "fp32",
+  "sequence_length": 512,
+  "files": {
+    "config.json": "99ff21db67f2aa251279f39b8e9ce02829be9bea57d878e910f4e9ee8d181225",
+    "model.safetensors": "87ecc3630d8dc2324c7a61e3448551cfa65732a3d27f24afbd2c94e0266b74b7",
+    "tokenizer.json": "2b37df34524d914c6f15ddccdb324c98d43358d5f68a52758fcc87721c3dd16d"
+  }
+}

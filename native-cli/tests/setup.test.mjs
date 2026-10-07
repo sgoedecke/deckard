@@ -5,11 +5,11 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { version } from "./model-fixture.mjs";
+import { assets, modelAvailable, version } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const model = process.env.DECKARD_MODEL_DIR;
-const available = !!model && fs.existsSync(path.join(model, "model.mlpackage/Manifest.json"));
+const available = modelAvailable(model);
 const extension = fileURLToPath(new URL("../../extension", import.meta.url));
 const manifestName = "com.sgoedecke.deckard.json";
 const key = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"))).key;
@@ -20,7 +20,8 @@ function fixture(t, shell = "zsh", useDefaultHome = false) {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".setup-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const user = path.join(root, "user home");
-  const home = path.join(user, useDefaultHome ? "Deckard" : "Library/Application Support/Deckard's app");
+  const defaultHome = process.platform === "darwin" ? "Deckard" : ".local/share/deckard";
+  const home = path.join(user, useDefaultHome ? defaultHome : "Library/Application Support/Deckard's app");
   const manifests = path.join(user, "Chrome manifests");
   fs.mkdirSync(user);
   const profile = path.join(user, shell === "bash" ? ".bash_profile" : ".zshrc");
@@ -260,8 +261,10 @@ test("corrupt model cannot activate or change profile and extension", { skip: !a
   const before = fs.readFileSync(f.profile);
   const current = fs.readlinkSync(path.join(f.home, "current"));
   const bad = path.join(f.root, "bad model");
-  fs.mkdirSync(path.join(bad, "model.mlpackage/Data/com.apple.CoreML"), { recursive: true });
-  fs.writeFileSync(path.join(bad, "model.mlpackage/Data/com.apple.CoreML/model.mlmodel"), "corrupt");
+  for (const name of Object.keys(assets.files)) {
+    fs.mkdirSync(path.dirname(path.join(bad, name)), { recursive: true });
+    fs.writeFileSync(path.join(bad, name), "corrupt");
+  }
   const result = f.run("install", ["--model-dir", bad, "--extension-dir", extension]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /asset_mismatch/);

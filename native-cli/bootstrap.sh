@@ -7,6 +7,8 @@ SDK="$CACHE/mlx-sdk"
 DOWNLOADS="$CACHE/downloads"
 WITH_MLX="${DECKARD_BOOTSTRAP_MLX:-0}"
 case "$WITH_MLX" in 0|1) ;; *) echo "DECKARD_BOOTSTRAP_MLX must be 0 or 1." >&2; exit 1 ;; esac
+# Linux builds the Candle backend instead of Core ML; see bootstrap-linux.sh.
+[ "$(uname -s)" != Linux ] || exec sh "$ROOT/native-cli/bootstrap-linux.sh"
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) ;;
   *) echo "The Gradient Core ML runtime requires Apple Silicon macOS 15 or newer." >&2; exit 1 ;;

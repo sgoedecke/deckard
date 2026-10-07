@@ -3,6 +3,7 @@
 /node_modules/
 /native-cli/build/
 /native-cli/tokenizer/target/
+/native-cli/candle/target/
 /native-cli/tests/.uninstall-*/
 /native-cli/tests/.installation-*/
 /native-cli/tests/.rollback-*/

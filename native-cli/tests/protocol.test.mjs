@@ -40,6 +40,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(root, "install.json"), JSON.stringify(installationMetadata()));
   return root;
 }
+const modelFile = Object.keys(assets.files).find(name => !name.includes("tokenizer"));
 function run(home, input) {
   return spawnSync(binary, ["start", "--home", home], { input, timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
 }
@@ -68,7 +69,7 @@ test("real compiled native messaging matches the extension's validator without l
   assert.equal(output.length, 3);
   assert.ok(validResult("ping", output[0].result));
   assert.equal(output[0].result.min_words, 50);
-  assert.equal(output[0].result.runtime, "native-coreml");
+  assert.equal(output[0].result.runtime, assets.runtime);
   assert.equal(output[0].result.scheduling, "default");
   assert.ok(validResult("analyze", output[1].result));
   assert.equal(output[1].result.status, "skipped");
@@ -100,7 +101,7 @@ test("invalid, oversized and truncated frames terminate with a framed error", t 
 });
 test("Unicode limits and missing assets produce explicit errors without page text", t => {
   const home = fixture(t);
-  fs.unlinkSync(path.join(home, "models/model.mlpackage/Data/com.apple.CoreML/model.mlmodel"));
+  fs.unlinkSync(path.join(home, "models", modelFile));
   const child = run(home, Buffer.concat([
     frame({ id: "large", type: "analyze", protocol_version: 3, text: "x".repeat(20001) }),
     frame({ id: "missing", type: "ping", protocol_version: 3 }),
@@ -116,7 +117,7 @@ test("installed metadata integrity and CLI argument errors are checked", t => {
   assert.equal(child.status, 1, "untrusted fixture assets must not pass the compiled-in pins");
   assert.match(child.stderr, /asset_mismatch/);
   const config = JSON.parse(fs.readFileSync(path.join(home, "install.json")));
-  config.model_files["model.mlpackage/Data/com.apple.CoreML/model.mlmodel"] = hash("fixture");
+  config.model_files[modelFile] = hash("fixture");
   fs.writeFileSync(path.join(home, "install.json"), JSON.stringify(config));
   child = spawnSync(binary, ["status", "--home", home], { encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 1);

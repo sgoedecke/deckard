@@ -5,11 +5,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalJson, installationMetadata } from "./model-fixture.mjs";
+import { canonicalJson, installationMetadata, modelAvailable } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const model = process.env.DECKARD_MODEL_DIR;
-const available = !!model && fs.existsSync(path.join(model, "model.mlpackage/Manifest.json"));
+const available = modelAvailable(model);
 const run = (exe, args, input) => spawnSync(exe, args, {
   input, encoding: input ? undefined : "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
 });
@@ -50,10 +50,10 @@ test("installation is idempotent, conflict-safe, relocatable, and independent of
   assert.equal(child.status, 0, child.stderr);
   const files = fs.readdirSync(fs.realpathSync(path.join(relocated, "current")), { recursive: true });
   assert.ok(!files.some(file => /\.(py|pyc|whl)$/.test(file) || /(?:^|\/)(python|cargo|rustc)(?:\/|$)/.test(file)));
-  child = run("/usr/bin/otool", ["-L", installed]);
+  child = process.platform === "darwin" ? run("/usr/bin/otool", ["-L", installed]) : run("ldd", [installed]);
   assert.equal(child.status, 0, child.stderr);
   assert.doesNotMatch(child.stdout, /homebrew|\.venv|libpython|libmlx|Metal\.framework/);
-  assert.match(child.stdout, /CoreML\.framework/);
+  if (process.platform === "darwin") assert.match(child.stdout, /CoreML\.framework/);
   assert.ok(!files.some(file => /packed\.safetensors|libmlx|mlx\.metallib/.test(file)));
   child = run(binary, ["uninstall", "--home", relocated, "--manifest-dir", manifests]);
   assert.equal(child.status, 1);
@@ -93,7 +93,8 @@ test("registration failure cannot activate a new release", { skip: !available },
   assert.ok(!fs.readdirSync(home).some(file => file.startsWith(".stage-")));
 });
 
-test("owned MLX 0.5 metadata upgrades to Core ML without losing registration or legacy teardown", { skip: !available }, t => {
+test("owned MLX 0.5 metadata upgrades to Core ML without losing registration or legacy teardown",
+  { skip: !available || (process.platform !== "darwin" && "earlier Deckard releases were macOS-only") }, t => {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".migration-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
   const home = path.join(root, "application");
