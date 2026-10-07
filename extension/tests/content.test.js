@@ -64,7 +64,8 @@ class Node {
     return null;
   }
 }
-async function harness({ auto = false, count = 1, getConfig, budget = 25000, dual = false, planHandler } = {}) {
+async function harness({ auto = false, count = 1, getConfig, budget = 25000, dual = false, planHandler,
+  crypto = undefined } = {}) {
   const root = new Node("html");
   root.lang = "en"; root.isConnected = true;
   const blocks = Array.from({ length: count }, () => {
@@ -117,7 +118,7 @@ async function harness({ auto = false, count = 1, getConfig, budget = 25000, dua
   let id = 0;
   const context = vm.createContext({
     document, window, chrome, location: { href: "https://example.com/article" },
-    crypto: { randomUUID: () => `id-${++id}` },
+    crypto: crypto || { randomUUID: () => `id-${++id}` },
     DeckardCore: { ...globalThis.DeckardCore, MAX_PAGE_WORDS: budget,
       contextSources: dual ? globalThis.DeckardCore.contextSources
         : blocks => blocks.map(block => ({ blocks: [block], text: block.text })),
@@ -161,6 +162,12 @@ async function harness({ auto = false, count = 1, getConfig, budget = 25000, dua
     start, finish, mutate, send, settle, flushTimers, timers, windowEvents, navigationEvents,
     get textReads() { return textReads; } };
 }
+
+test("insecure pages without crypto.randomUUID are skipped without throwing", async () => {
+  const h = await harness({ crypto: {} });
+  assert.equal(h.listeners.length, 0);
+  assert.equal(h.requests.length, 0);
+});
 
 test("content script is idempotent and marks prose red without hiding or replacing nodes", async () => {
   const h = await harness();
