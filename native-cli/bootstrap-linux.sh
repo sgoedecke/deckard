@@ -6,6 +6,8 @@
 # for the tokenizer and Candle crates. System packages (a C++ compiler, CMake,
 # pkg-config, OpenSSL and libcurl development headers) are only checked, never
 # installed.
+# It also fetches the official ONNX Runtime release (headers, library,
+# license notices) for the ONNX Runtime backend.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -13,11 +15,14 @@ CACHE="${NATIVE_CACHE:-$ROOT/cache/native-build}"
 DOWNLOADS="$CACHE/downloads"
 HOST=x86_64-unknown-linux-gnu
 TOOLCHAIN="$CACHE/rustup/toolchains/1.90.0-$HOST"
+# ONNX Runtime; the version must match linux.cmake.
+ORT_VERSION=1.24.1
+ORT="$CACHE/onnxruntime-$ORT_VERSION"
 
 fail() { echo "$*" >&2; exit 1; }
 
 [ "$(uname -m)" = x86_64 ] || fail "The Gradient Candle runtime requires Linux x86_64."
-for tool in cmake curl pkg-config unzip; do
+for tool in cmake curl pkg-config unzip objcopy; do
   command -v "$tool" >/dev/null || fail "Install $tool first."
 done
 command -v "${CXX:-c++}" >/dev/null || fail "Install a C++20 compiler (g++ or clang++) first."
@@ -36,7 +41,8 @@ require_pinned_toolchain() {
 
 if [ "$CACHE" != "$ROOT/cache/native-build" ]; then
   for required in json/include/nlohmann/json.hpp cargo/registry "rustup/toolchains/1.90.0-$HOST/bin/cargo" \
-    licenses/NLOHMANN-LICENSE; do
+    licenses/NLOHMANN-LICENSE "onnxruntime-$ORT_VERSION/include/onnxruntime_c_api.h" licenses/ONNXRUNTIME-LICENSE \
+    "onnxruntime-$ORT_VERSION/lib/libonnxruntime.so.$ORT_VERSION" licenses/ONNXRUNTIME-THIRD-PARTY-NOTICES.txt; do
     [ -e "$CACHE/$required" ] || fail "External NATIVE_CACHE is read-only and incomplete: $required"
   done
   require_pinned_toolchain
@@ -66,6 +72,17 @@ fetch 'https://raw.githubusercontent.com/nlohmann/json/9cca280a4d0ccf0c08f47a99a
   "$CACHE/licenses/NLOHMANN-LICENSE" 86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14
 fetch 'https://huggingface.co/ShantanuT01/gradient-ai-text-detector/raw/c2e8b6df87f8a211cbffb713fa9873a0c3a9713f/README.md' \
   "$CACHE/licenses/GRADIENT-MODEL-CARD.md" a147869ab24ad59172bcdc7cc69cf716c646ddf0745a0e1fbb12515a2c6e752a
+
+ORT_ARCHIVE="onnxruntime-linux-x64-$ORT_VERSION"
+fetch "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/$ORT_ARCHIVE.tgz" \
+  "$DOWNLOADS/$ORT_ARCHIVE.tgz" 9142552248b735920f9390027e4512a2cacf8946a1ffcbe9071a5c210531026f
+mkdir -p "$ORT"
+tar -xzf "$DOWNLOADS/$ORT_ARCHIVE.tgz" -C "$ORT" --strip-components=1 \
+  "$ORT_ARCHIVE/include" "$ORT_ARCHIVE/lib/libonnxruntime.so.$ORT_VERSION"
+tar -xOzf "$DOWNLOADS/$ORT_ARCHIVE.tgz" "$ORT_ARCHIVE/LICENSE" \
+  > "$CACHE/licenses/ONNXRUNTIME-LICENSE"
+tar -xOzf "$DOWNLOADS/$ORT_ARCHIVE.tgz" "$ORT_ARCHIVE/ThirdPartyNotices.txt" \
+  > "$CACHE/licenses/ONNXRUNTIME-THIRD-PARTY-NOTICES.txt"
 
 export CARGO_HOME="$CACHE/cargo"
 export RUSTUP_HOME="$CACHE/rustup"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gradient_backend.hpp"
 #include "support.hpp"
 #include <cstdint>
 #include <string>
@@ -23,7 +24,10 @@ class CandleGradient {
  public:
   CandleGradient(const fs::path& model_directory, const fs::path& /*cache_directory*/) {
     // Like the Core ML backend, never load weights that do not match the pins.
-    verify_model_assets(model_directory);
+    // Only the files Candle reads are hashed; model.onnx may sit next to them.
+    verify_model_assets(model_directory, false);
+    require_model_file(model_directory, "config.json");
+    require_model_file(model_directory, "model.safetensors");
     const auto config = (model_directory / "config.json").string();
     const auto weights = (model_directory / "model.safetensors").string();
     check(aih_candle_open(config.data(), config.size(), weights.data(), weights.size(), &handle_),
@@ -34,12 +38,7 @@ class CandleGradient {
   CandleGradient& operator=(const CandleGradient&) = delete;
 
   double logit(const std::vector<std::uint32_t>& ids, const std::vector<std::uint32_t>& mask) {
-    if (ids.size() != mask.size())
-      throw Error("invalid_input", "Gradient token ids and attention mask differ in length.");
-    if (ids.size() > max_tokens)
-      throw Error("invalid_input", "Gradient input exceeds the 512-token limit.");
-    if (ids.size() < 3 || ids.front() != 1 || ids.back() != 2)
-      throw Error("invalid_input", "Gradient input must be wrapped as CLS..SEP.");
+    validate_gradient_input(ids, mask);
     // The mask crosses the C ABI as f32, like the Core ML input.
     const std::vector<float> float_mask(mask.begin(), mask.end());
     double value = 0;
@@ -49,8 +48,6 @@ class CandleGradient {
   }
 
  private:
-  static constexpr size_t max_tokens = 512;
-
   // Status codes of lib.rs. Messages never include text or paths.
   static void check(std::int32_t status, const char* message) {
     switch (status) {

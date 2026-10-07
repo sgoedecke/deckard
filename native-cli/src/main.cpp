@@ -32,7 +32,8 @@ Options options(int argc, char** argv, int start) {
     const std::set<std::string> values{"--home", "--extension-id", "--manifest-dir", "--model-dir",
                                       "--file", "--model", "--fixtures", "--output", "--source",
                                       "--extension-dir", "--shell", "--cache-dir"};
-    const std::set<std::string> flags{"--replace", "--no-register", "--no-extension", "--no-download"};
+    const std::set<std::string> flags{"--replace", "--no-register", "--no-extension", "--no-download", "--onnx",
+                                      "--candle"};
     Options result;
     for (int i = start; i < argc; ++i) {
         std::string key = argv[i];
@@ -44,6 +45,19 @@ Options options(int argc, char** argv, int start) {
         else throw Error("arguments", "Unknown option: " + key);
     }
     return result;
+}
+// --onnx and --candle choose the Linux runtime (see gradient_backend.hpp).
+std::set<std::string> with_backend_options(std::set<std::string> allowed) {
+#if defined(__linux__)
+    allowed.insert({"--onnx", "--candle"});
+#endif
+    return allowed;
+}
+Backend backend_for(const Options& options) {
+    if (options.has("--onnx") && options.has("--candle")) throw Error("arguments", "Choose either --onnx or --candle.");
+    if (options.has("--onnx")) return Backend::Onnx;
+    if (options.has("--candle")) return Backend::Candle;
+    return Backend::Auto;
 }
 void allow_options(const Options& options, const std::set<std::string>& allowed) {
     for (const auto& item : options.values)
@@ -252,6 +266,14 @@ void install(const Options& options) {
         fs::create_directories(destination.parent_path());
         copy_checked(source / it.key(), destination);
     }
+    // Optional pinned files (Linux: model.onnx) are installed when the source has them.
+    const auto& optional = optional_model_files();
+    Json installed_optional = Json::object();
+    for (auto it = optional.begin(); it != optional.end(); ++it) {
+        if (!fs::exists(source / it.key())) continue;
+        copy_checked(source / it.key(), runtime / "models" / it.key());
+        installed_optional[it.key()] = it.value();
+    }
     Tokenizer tokenizer(runtime / "models/tokenizer.json");
     auto probe = tokenizer.wrap(tokenizer.encode("Native Gradient installation."));
     if (probe.size() < 3 || probe.front() != 1 || probe.back() != 2)
@@ -266,6 +288,10 @@ void install(const Options& options) {
         {"binary_sha256", sha256(runtime / "bin/deckard")},
         {"threshold_notice", "Experimental score, not a probability; browsing false positives are not independently validated."},
     };
+    // install.json names the release, so it lists model.onnx: otherwise adding
+    // or removing it and installing again reuses the old release. Omitted when
+    // absent, so those releases keep their names.
+    if (!installed_optional.empty()) config["optional_model_files"] = installed_optional;
     config["license_files"] = Json::array();
     config["license_sha256"] = Json::object();
     for (const auto& entry : fs::recursive_directory_iterator(runtime / "share/licenses"))
@@ -417,6 +443,9 @@ Removal validate_release(const fs::path& release) {
             for (auto parent = file.parent_path(); !parent.empty(); parent = parent.parent_path())
                 removal.directories.insert(parent);
         }
+        const auto& optional = optional_model_files();
+        for (auto it = optional.begin(); it != optional.end(); ++it)
+            removal.files.insert(fs::path("models") / it.key());
     } else {
         removal.files.insert({"lib/libmlx.dylib", "lib/mlx.metallib",
             "models/packed.safetensors", "models/tokenizer.json"});
@@ -589,7 +618,7 @@ void uninstall(const Options& options) {
               << "Reload Chrome to close any running host. Other extensions and shell settings are untouched.\n";
 }
 void verify(const Options& options) {
-    allow_options(options, {"--model", "--fixtures", "--output", "--cache-dir"});
+    allow_options(options, with_backend_options({"--model", "--fixtures", "--output", "--cache-dir"}));
     if (!options.has("--model") || !options.has("--fixtures"))
         throw Error("arguments", "verify requires --model and --fixtures.");
     if (options.has("--output") && path_present(options.get("--output")))
@@ -601,7 +630,7 @@ void verify(const Options& options) {
     auto started = std::chrono::steady_clock::now();
     std::unique_ptr<ModelBackend> model(create_model_backend(
         options.get("--model"),
-        options.has("--cache-dir") ? fs::absolute(options.get("--cache-dir")) : model_cache()));
+        options.has("--cache-dir") ? fs::absolute(options.get("--cache-dir")) : model_cache(), backend_for(options)));
     double load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     Json rows = Json::array();
     double logit_error = 0, score_error = 0;
@@ -626,7 +655,7 @@ void verify(const Options& options) {
     Json result = {{"status", passed ? "complete" : "failed"}, {"cases", rows},
                    {"max_logit_error", logit_error}, {"max_score_error", score_error}, {"load_ms", load},
                    {"same_default_decisions", same_decisions}, {"score_tolerance", 0.002},
-                   {"runtime", runtime_id}, {"scheduling", "default"},
+                   {"runtime", model->runtime()}, {"scheduling", "default"},
                    {"compute_units", native_compute_units}, {"model_assets_sha256", model_assets_id()},
                    {"source_weights_sha256", packed_sha},
                    {"fixtures_sha256", sha256(options.get("--fixtures"))}};
@@ -641,12 +670,18 @@ constexpr const char* help_title = "native Gradient/Core ML for Apple Silicon ma
 constexpr const char* help_install_flags = "";
 constexpr const char* help_install_model =
     "  Uses the prebuilt Core ML model and extension from the release bundle by default.\n";
+constexpr const char* help_backend_flags = "";
+constexpr const char* help_backends = "";
 #else
 constexpr const char* help_title = "native Gradient/Candle for Linux x86_64";
 constexpr const char* help_install_flags = " [--no-download]";
 constexpr const char* help_install_model =
     "  Downloads the pinned model into ~/.cache/deckard unless --model-dir is given;\n"
     "  --no-download uses only files already there.\n";
+constexpr const char* help_backend_flags = " [--onnx | --candle]";
+constexpr const char* help_backends =
+    "  With model.onnx installed, ONNX Runtime serves inference and Candle takes over if it\n"
+    "  fails; otherwise Candle does. --onnx or --candle forces one runtime without fallback.\n";
 #endif
 void help() {
     std::cout <<
@@ -662,13 +697,14 @@ void help() {
         "  --home is the install prefix, not current or a release directory.\n"
         "  Retains unknown files, caches, and the installation lock. Refuses foreign installations.\n"
         "  Removes owned PATH block and extension files; Chrome Remove is manual.\n\n"
-        "deckard start [--home DIR]\n"
+        "deckard start [--home DIR]" << help_backend_flags << "\n"
         "  Serve Chrome native messaging on stdin/stdout; Chrome normally launches this.\n"
         "  This is not an HTTP daemon and should not be backgrounded manually.\n\n"
         "deckard status [--home DIR]\n"
-        "deckard scan [--home DIR] [--file FILE|-]\n"
+        "deckard scan [--home DIR] [--file FILE|-]" << help_backend_flags << "\n"
         "  Score UTF-8 text from a file or stdin and print JSON; no page text is logged.\n\n"
-        "deckard verify --model DIR --fixtures FILE [--output FILE] [--cache-dir DIR]\n"
+        "deckard verify --model DIR --fixtures FILE [--output FILE] [--cache-dir DIR]" << help_backend_flags << "\n"
+        << help_backends <<
         "deckard self-test\n";
 }
 }
@@ -695,14 +731,14 @@ int main(int argc, char** argv) {
         if (command == "install") install(args);
         else if (command == "uninstall") uninstall(args);
         else if (command == "start") {
-            allow_options(args, {"--home"});
-            return serve(home_for(args));
+            allow_options(args, with_backend_options({"--home"}));
+            return serve(home_for(args), backend_for(args));
         } else if (command == "status") {
             allow_options(args, {"--home"});
             auto config = installed_config(home_for(args), true);
             std::cout << Json{{"status", "installed"}, {"home", home_for(args).string()}, {"installation", config}}.dump(2) << '\n';
         } else if (command == "scan") {
-            allow_options(args, {"--home", "--file"});
+            allow_options(args, with_backend_options({"--home", "--file"}));
             default_priority();
             std::string text;
             if (args.get("--file", "-") == "-") {
@@ -713,7 +749,7 @@ int main(int argc, char** argv) {
                     if (text.size() > 80000) throw Error("invalid_text", "Text exceeds the byte limit.");
                 }
             } else text = read_text(args.get("--file"), 80000);
-            Analyzer analyzer(home_for(args));
+            Analyzer analyzer(home_for(args), backend_for(args));
             std::cout << analyzer.analyze(text).dump(2) << '\n';
         } else if (command == "verify") verify(args);
         else if (command == "self-test") {

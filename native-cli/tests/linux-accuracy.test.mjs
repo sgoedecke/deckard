@@ -13,16 +13,19 @@ import { modelAvailable } from "./model-fixture.mjs";
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
 const model = process.env.DECKARD_MODEL_DIR;
 const runsModel = process.platform === "linux" && modelAvailable(model);
+const runsOnnx = runsModel && fs.existsSync(path.join(model, "model.onnx"));
 const referencePath = fileURLToPath(new URL("fixtures/linux-reference.json", import.meta.url));
 const reference = JSON.parse(fs.readFileSync(referencePath));
 const pins = JSON.parse(fs.readFileSync(new URL("../model-assets-linux.json", import.meta.url)));
 const flagThreshold = 0.97;  // the host's default flag threshold
 const sigmoid = value => 1 / (1 + Math.exp(-value));
 
-function verify(t, fixtures) {
+// `runtime` is the flag that forces one runtime, so the result never depends
+// on whether model.onnx happens to be installed.
+function verify(t, fixtures, runtime) {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".accuracy-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const child = spawnSync(binary, ["verify", "--model", model, "--fixtures", fixtures, "--cache-dir", path.join(root, "cache")],
+  const child = spawnSync(binary, ["verify", "--model", model, "--fixtures", fixtures, "--cache-dir", path.join(root, "cache"), runtime],
     { encoding: "utf8", timeout: 600000 });
   return { status: child.status, stderr: child.stderr, result: child.stdout ? JSON.parse(child.stdout) : null };
 }
@@ -47,11 +50,14 @@ test("the Linux reference fixtures belong to the pinned checkpoint and cover bot
   assert.ok(flagged > 0 && flagged < reference.cases.length, "cases on both sides of the flag threshold");
 });
 
-test("Candle reproduces the PyTorch reference logits", { skip: !runsModel }, t => {
-  const { status, stderr, result } = verify(t, referencePath);
+for (const [name, flag, runtime, skip] of [
+  ["Candle", "--candle", "native-candle", !runsModel],
+  ["ONNX Runtime", "--onnx", "native-onnx", !runsOnnx && "needs DECKARD_MODEL_DIR with model.onnx"],
+]) test(`${name} reproduces the PyTorch reference logits`, { skip }, t => {
+  const { status, stderr, result } = verify(t, referencePath, flag);
   assert.equal(status, 0, stderr);
   assert.equal(result.status, "complete");
-  assert.equal(result.runtime, "native-candle");
+  assert.equal(result.runtime, runtime);
   assert.equal(result.fixtures_sha256, createHash("sha256").update(fs.readFileSync(referencePath)).digest("hex"));
   assert.deepEqual(result.cases.map(item => item.name), reference.cases.map(item => item.name));
   assert.ok(result.cases.every(item => item.same_default_decision));
@@ -68,7 +74,7 @@ test("verify fails when scores drift beyond the tolerance, even with the same de
   const fixtures = path.join(fs.mkdtempSync(fileURLToPath(new URL(".accuracy-", import.meta.url))), "drifted.json");
   t.after(() => fs.rmSync(path.dirname(fixtures), { recursive: true, force: true }));
   fs.writeFileSync(fixtures, JSON.stringify(drifted));
-  const { status, stderr, result } = verify(t, fixtures);
+  const { status, stderr, result } = verify(t, fixtures, "--candle");
   assert.equal(status, 1);
   assert.match(stderr, /fidelity_failed/);
   assert.equal(result.status, "failed");
