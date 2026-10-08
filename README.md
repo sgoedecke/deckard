@@ -20,7 +20,8 @@ In Chrome:
    `~/Deckard/extension` (the **Deckard** folder in your home folder).
 3. Pin Deckard so you can see it in your extension hotbar
 
-Right now this only works on Apple Silicon macs. If you want to use it on a PC or some other device, PRs are welcome.
+The installer above is for Apple Silicon Macs. On Linux x86_64, build Deckard from
+source as described in [Deckard on Linux](docs/LINUX.md). For other devices, PRs are welcome.
 
 The installer defaults to `~/Deckard`; `--home DIR` selects a different location.
 Older installers use `~/Library/Application Support/Deckard`. To move an existing

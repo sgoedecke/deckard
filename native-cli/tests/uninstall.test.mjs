@@ -69,7 +69,8 @@ test("absent uninstall is idempotent and creates no directories", t => {
   }
 });
 
-for (const version of ["0.4.0", "0.4.1", "0.5.0", "0.6.0", "0.6.1", "0.6.2", "0.6.3"]) test(`uninstall still recognizes positively owned Deckard ${version} releases`, t => {
+for (const version of ["0.4.0", "0.4.1", "0.5.0", "0.6.0", "0.6.1", "0.6.2", "0.6.3"]) test(`uninstall still recognizes positively owned Deckard ${version} releases`,
+  { skip: process.platform !== "darwin" && "earlier Deckard releases were macOS-only" }, t => {
   const f = fixture(t, version);
   f.install();
   const result = f.run();

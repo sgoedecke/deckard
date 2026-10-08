@@ -11,7 +11,8 @@ const dependencyCache = process.env.NATIVE_CACHE || path.join(native, "../cache/
 const available = process.platform === "darwin" &&
   fs.existsSync(path.join(dependencyCache, "json/include/nlohmann/json.hpp"));
 
-test("production Core ML target has no MLX or GPU configuration", () => {
+test("production Core ML target has no MLX or GPU configuration",
+  { skip: process.platform !== "darwin" && "the Core ML target is macOS-only" }, () => {
   const cmake = fs.readFileSync(path.join(native, "CMakeLists.txt"), "utf8");
   const runtime = fs.readFileSync(path.join(native, "src/coreml_gradient.mm"), "utf8");
   const host = fs.readFileSync(path.join(native, "src/host.cpp"), "utf8");

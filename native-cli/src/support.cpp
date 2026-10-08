@@ -1,11 +1,18 @@
 #include "support.hpp"
 #include "model_assets.hpp"
+#if defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
+#else
+#include <openssl/evp.h>
+#endif
 #include <curl/curl.h>
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
 #include <sys/resource.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -14,6 +21,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <set>
 
@@ -25,6 +33,30 @@ std::string hex(const unsigned char* bytes, size_t count) {
     for (size_t i = 0; i < count; ++i) out << std::setw(2) << static_cast<unsigned>(bytes[i]);
     return out.str();
 }
+#if !defined(__APPLE__)
+// Incremental SHA-256 through OpenSSL's EVP API; the raw SHA256_* functions
+// are deprecated since OpenSSL 3.0.
+class Sha256 {
+public:
+    Sha256() : context_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+        if (!context_ || EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1)
+            throw Error("digest_failed", "Cannot initialize the SHA-256 digest.");
+    }
+    void update(const char* data, size_t size) {
+        if (EVP_DigestUpdate(context_.get(), data, size) != 1)
+            throw Error("digest_failed", "Cannot compute the SHA-256 digest.");
+    }
+    std::string hex_digest() {
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int size = 0;
+        if (EVP_DigestFinal_ex(context_.get(), digest, &size) != 1)
+            throw Error("digest_failed", "Cannot compute the SHA-256 digest.");
+        return hex(digest, size);
+    }
+private:
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+};
+#endif
 std::vector<uint32_t> codepoints(const std::string& value) {
     std::vector<uint32_t> result;
     for (size_t i = 0; i < value.size();) {
@@ -58,6 +90,9 @@ struct Download {
     std::ofstream stream;
     uint64_t bytes = 0;
     uint64_t maximum;
+    std::string label;
+    uint64_t resumed_from = 0;
+    int shown_percent = -1;
 };
 size_t receive(char* data, size_t size, size_t count, void* pointer) {
     auto& state = *static_cast<Download*>(pointer);
@@ -69,14 +104,39 @@ size_t receive(char* data, size_t size, size_t count, void* pointer) {
     state.bytes += length;
     return length;
 }
+// curl's progress callback. Model files are hundreds of MiB, so install
+// repaints one "label: done / total MiB (P%)" line in place, only when the
+// percentage changes. curl counts a resumed transfer from the resume offset;
+// the offset is added back so the line describes the whole file. Returning
+// nonzero would abort the transfer.
+int report_progress(void* pointer, curl_off_t remaining_total, curl_off_t remaining_done, curl_off_t, curl_off_t) {
+    auto& state = *static_cast<Download*>(pointer);
+    if (remaining_total <= 0) return 0;
+    const uint64_t total = state.resumed_from + static_cast<uint64_t>(remaining_total);
+    const uint64_t done = state.resumed_from + static_cast<uint64_t>(remaining_done);
+    const int percent = static_cast<int>(std::min<uint64_t>(100, done * 100 / total));
+    if (percent == state.shown_percent) return 0;
+    state.shown_percent = percent;
+    constexpr uint64_t mib = 1024 * 1024;
+    std::cout << '\r' << state.label << ": " << done / mib << " / " << total / mib << " MiB (" << percent << "%)"
+              << std::flush;
+    return 0;
+}
 }
 
 fs::path executable_path() {
+#if defined(__APPLE__)
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
     std::vector<char> buffer(size);
     if (_NSGetExecutablePath(buffer.data(), &size)) throw Error("runtime_path", "Cannot locate the executable.");
     return fs::canonical(buffer.data());
+#elif defined(__linux__)
+    std::error_code error;
+    auto resolved = fs::canonical("/proc/self/exe", error);
+    if (error) throw Error("runtime_path", "Cannot locate the executable.");
+    return resolved;
+#endif
 }
 fs::path user_home() {
     const char* home = std::getenv("HOME");
@@ -88,7 +148,18 @@ fs::path default_home() {
     if (override_path && *override_path) return fs::absolute(override_path);
     auto bundled = executable_path().parent_path().parent_path();
     if (fs::is_regular_file(bundled / "install.json")) return bundled;
+#if defined(__APPLE__)
     return user_home() / "Deckard/current";
+#elif defined(__linux__)
+    return user_home() / ".local/share/deckard/current";
+#endif
+}
+fs::path default_manifest_dir() {
+#if defined(__APPLE__)
+    return user_home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts";
+#elif defined(__linux__)
+    return user_home() / ".config/google-chrome/NativeMessagingHosts";
+#endif
 }
 std::string read_text(const fs::path& path, size_t limit) {
     if (!fs::is_regular_file(path) || fs::file_size(path) > limit)
@@ -135,6 +206,7 @@ void write_json(const fs::path& path, const Json& value) {
 std::string sha256(const fs::path& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) throw Error("missing_assets", "Required asset is missing or unreadable.");
+#if defined(__APPLE__)
     CC_SHA256_CTX context;
     CC_SHA256_Init(&context);
     std::array<char, 65536> buffer{};
@@ -146,11 +218,29 @@ std::string sha256(const fs::path& path) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256_Final(digest, &context);
     return hex(digest, sizeof(digest));
+#else
+    Sha256 context;
+    std::array<char, 65536> buffer{};
+    while (stream) {
+        stream.read(buffer.data(), buffer.size());
+        context.update(buffer.data(), static_cast<size_t>(stream.gcount()));
+    }
+    if (!stream.eof()) throw Error("asset_read", "Failed while reading an asset.");
+    return context.hex_digest();
+#endif
 }
 std::string text_sha256(const std::string& text) {
+#if defined(__APPLE__)
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(text.data(), static_cast<CC_LONG>(text.size()), digest);
     return hex(digest, sizeof(digest));
+#else
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int size = 0;
+    if (EVP_Digest(text.data(), text.size(), digest, &size, EVP_sha256(), nullptr) != 1)
+        throw Error("digest_failed", "Cannot compute the SHA-256 digest.");
+    return hex(digest, size);
+#endif
 }
 void require_hash(const fs::path& path, const std::string& expected) {
     if (expected.size() != 64 || sha256(path) != expected)
@@ -166,7 +256,8 @@ void download(const std::string& url, const fs::path& destination, const std::st
         fs::rename(partial, destination);
         return;
     }
-    Download state{std::ofstream(partial, std::ios::binary | std::ios::app), existing, max_bytes};
+    Download state{std::ofstream(partial, std::ios::binary | std::ios::app), existing, max_bytes,
+                   destination.filename().string(), existing};
     if (!state.stream) throw Error("download_write", "Cannot create the download file.");
     CURL* handle = curl_easy_init();
     if (!handle) throw Error("download_init", "Cannot initialize HTTPS downloads.");
@@ -176,38 +267,64 @@ void download(const std::string& url, const fs::path& destination, const std::st
     curl_easy_setopt(handle, CURLOPT_REDIR_PROTOCOLS_STR, "https");
     curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 8L);
     curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 30L);
-    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 1200L);
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 7200L);
     curl_easy_setopt(handle, CURLOPT_FAILONERROR, 1L);
     if (existing) curl_easy_setopt(handle, CURLOPT_RESUME_FROM_LARGE, static_cast<curl_off_t>(existing));
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, receive);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &state);
+    // Surface live progress instead of a silent multi-hundred-MiB transfer; the
+    // progress line is terminated below so it does not run into later messages.
+    curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, report_progress);
+    curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &state);
     CURLcode result = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
+    // Close the \r-updating progress line whether the transfer succeeded or not.
+    if (state.shown_percent >= 0) std::cout << '\n' << std::flush;
     state.stream.close();
     if (result != CURLE_OK || !state.stream) throw Error("download_failed", "HTTPS download failed; no installation activated.");
     require_hash(partial, expected);
     fs::rename(partial, destination);
 }
 void background() {
+#if defined(__APPLE__)
     if (setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG) != 0 ||
         pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0) != 0)
         throw Error("scheduling_failed", "Cannot enable background scheduling.");
+#elif defined(__linux__)
+    if (setpriority(PRIO_PROCESS, 0, 10) != 0)
+        throw Error("scheduling_failed", "Cannot enable background scheduling.");
+#endif
 }
 void default_priority() {
+#if defined(__APPLE__)
     if (setpriority(PRIO_DARWIN_PROCESS, 0, 0) != 0 ||
         pthread_set_qos_class_self_np(QOS_CLASS_DEFAULT, 0) != 0)
         throw Error("scheduling_failed", "Cannot enable default-priority inference.");
+#elif defined(__linux__)
+    // Unprivileged processes may not lower their nice value, so a deckard
+    // started niced (for example by a niced launcher) keeps that priority.
+    if (setpriority(PRIO_PROCESS, 0, 0) != 0 && errno != EACCES && errno != EPERM)
+        throw Error("scheduling_failed", "Cannot enable default-priority inference.");
+#endif
 }
 const Json& model_assets() {
     static const auto assets = Json::parse(model_assets_json);
     return assets;
 }
 std::string model_assets_id() { return model_assets_sha256; }
-fs::path model_cache() { return user_home() / "Library/Caches/Deckard/coreml"; }
-void verify_model_assets(const fs::path& directory, bool verify_hashes) {
+fs::path model_cache() {
+#if defined(__APPLE__)
+    return user_home() / "Library/Caches/Deckard/coreml";
+#elif defined(__linux__)
+    return user_home() / ".cache/deckard";
+#endif
+}
+void verify_model_assets(const fs::path& directory, bool verify_hashes, bool allow_unpinned) {
     std::error_code error;
     const auto root = fs::canonical(directory, error);
-    if (error) throw Error("missing_assets", "Core ML model assets are missing. Install the Core ML release bundle.");
+    const std::string missing = std::string(model_assets_name) + " are missing. " + reinstall_hint;
+    if (error) throw Error("missing_assets", missing);
     std::set<fs::path> directories;
     const auto& files = model_assets().at("files");
     for (auto it = files.begin(); it != files.end(); ++it) {
@@ -217,7 +334,7 @@ void verify_model_assets(const fs::path& directory, bool verify_hashes) {
             current /= part;
             const auto status = fs::symlink_status(current);
             if (status.type() == fs::file_type::not_found)
-                throw Error("missing_assets", "Core ML model assets are missing. Install the Core ML release bundle.");
+                throw Error("missing_assets", missing);
             const bool leaf = current == root / relative;
             if (leaf ? !fs::is_regular_file(status) : !fs::is_directory(status))
                 throw Error("asset_mismatch", "Model assets must be ordinary files and directories, not links.");
@@ -225,13 +342,16 @@ void verify_model_assets(const fs::path& directory, bool verify_hashes) {
         }
         if (verify_hashes) require_hash(root / relative, it.value().get<std::string>());
     }
-    // Core ML must never consume extra, unpinned files hidden inside the package.
-    for (const auto& entry : fs::recursive_directory_iterator(root / model_assets().at("model_package").get<std::string>())) {
+    // The runtime must never consume extra, unpinned files hidden inside the
+    // package (Core ML) or the model directory itself (Candle, no package).
+    if (allow_unpinned) return;
+    const auto package = root / model_assets().value("model_package", std::string());
+    for (const auto& entry : fs::recursive_directory_iterator(package)) {
         const auto relative = entry.path().lexically_relative(root);
         const auto status = entry.symlink_status();
         if ((fs::is_directory(status) && directories.count(relative)) ||
             (fs::is_regular_file(status) && files.contains(relative.generic_string()))) continue;
-        throw Error("asset_mismatch", "The Core ML package contains unexpected assets.");
+        throw Error("asset_mismatch", "The " + std::string(model_package_name) + " contains unexpected assets.");
     }
 }
 bool extension_id_valid(const std::string& id) {
@@ -279,12 +399,12 @@ Json installed_config(const fs::path& home, bool verify) {
         config.value("policy", Json()) != policy_id || config.value("flag_threshold", Json()) != flag_threshold ||
         config.value("experimental", Json()) != true ||
         config.value("runtime", Json()) != runtime_id ||
-        config.value("source", Json()) != "verified-coreml-export" ||
+        config.value("source", Json()) != native_source ||
         config.value("weights_sha256", Json()) != packed_sha ||
         config.value("tokenizer_sha256", Json()) != tokenizer_sha ||
         config.value("model_assets_sha256", Json()) != model_assets_id() ||
         config.value("model_files", Json()) != model_assets().at("files"))
-        throw Error("invalid_installation", "Installation metadata is incompatible. Install the Core ML release bundle.");
+        throw Error("invalid_installation", std::string("Installation metadata is incompatible. ") + reinstall_hint);
     const auto models = fs::canonical(home) / "models";
     if (!fs::is_directory(fs::symlink_status(models)))
         throw Error("missing_assets", "Model assets are missing or redirected. Run deckard install.");

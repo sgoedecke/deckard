@@ -12,16 +12,36 @@ inline constexpr const char* model_id = "ShantanuT01/gradient-ai-text-detector";
 inline constexpr const char* revision = "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f";
 inline constexpr const char* host_name = "com.sgoedecke.deckard";
 inline constexpr const char* app_version = "0.6.4";
-inline constexpr const char* runtime_id = "native-coreml";
 inline constexpr const char* default_extension_id = "bkihjdkalohbkgnjjoobababhipefjdg";
 inline constexpr const char* policy_id = "gradient-q4-two-scale-v1";
 inline constexpr double flag_threshold = 0.97;
 inline constexpr int protocol_version = 3;
 inline constexpr size_t min_words = 50;
-inline constexpr const char* packed_sha = "85a9e02ebdcbbe1dd84cdbf893b708e44ee4691cadc7e1a4780039e22097ac98";
-inline constexpr const char* tokenizer_sha = "4b4f60231058db4b5794e7b124bb7945bc8ade6719282de4d2e0372ee527b929";
 inline constexpr const char* upstream_tokenizer_sha = "2b37df34524d914c6f15ddccdb324c98d43358d5f68a52758fcc87721c3dd16d";
 inline constexpr const char* fp32_sha = "87ecc3630d8dc2324c7a61e3448551cfa65732a3d27f24afbd2c94e0266b74b7";
+// Per-platform runtime identity. macOS runs the pinned fp16 Core ML export;
+// Linux runs the pinned fp32 Hugging Face checkpoint through Candle.
+#if defined(__APPLE__)
+inline constexpr const char* runtime_id = "native-coreml";
+inline constexpr const char* packed_sha = "85a9e02ebdcbbe1dd84cdbf893b708e44ee4691cadc7e1a4780039e22097ac98";
+inline constexpr const char* tokenizer_sha = "4b4f60231058db4b5794e7b124bb7945bc8ade6719282de4d2e0372ee527b929";
+inline constexpr const char* native_source = "verified-coreml-export";
+inline constexpr const char* native_description = "Deckard native Gradient Core ML (experimental marking)";
+inline constexpr const char* native_compute_units = "cpu_and_neural_engine";
+inline constexpr const char* model_assets_name = "Core ML model assets";
+inline constexpr const char* model_package_name = "Core ML package";
+inline constexpr const char* reinstall_hint = "Install the Core ML release bundle.";
+#elif defined(__linux__)
+inline constexpr const char* runtime_id = "native-candle";
+inline constexpr const char* packed_sha = fp32_sha;
+inline constexpr const char* tokenizer_sha = upstream_tokenizer_sha;
+inline constexpr const char* native_source = "verified-candle-export";
+inline constexpr const char* native_description = "Deckard native Gradient Candle (experimental marking)";
+inline constexpr const char* native_compute_units = "cpu";
+inline constexpr const char* model_assets_name = "Candle model assets";
+inline constexpr const char* model_package_name = "Candle model directory";
+inline constexpr const char* reinstall_hint = "Run deckard install.";
+#endif
 
 struct Error : std::runtime_error {
     std::string code;
@@ -30,6 +50,7 @@ struct Error : std::runtime_error {
 fs::path executable_path();
 fs::path user_home();
 fs::path default_home();
+fs::path default_manifest_dir();
 std::string read_text(const fs::path& path, size_t limit = 1024 * 1024);
 Json read_json(const fs::path& path, size_t limit = 1024 * 1024);
 void write_json(const fs::path& path, const Json& value);
@@ -41,7 +62,7 @@ void background();
 void default_priority();
 const Json& model_assets();
 std::string model_assets_id();
-void verify_model_assets(const fs::path& directory, bool verify_hashes = true);
+void verify_model_assets(const fs::path& directory, bool verify_hashes = true, bool allow_unpinned = false);
 fs::path model_cache();
 bool extension_id_valid(const std::string& id);
 size_t characters(const std::string& text);
