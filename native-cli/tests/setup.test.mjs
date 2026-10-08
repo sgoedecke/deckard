@@ -136,6 +136,36 @@ test("a symlinked shell profile is refused with its path and a --shell none hint
   assert.equal(fs.readFileSync(target, "utf8"), "# managed elsewhere\n");
 });
 
+test("a Chrome manifest directory behind a user-owned symlink is resolved, not refused", { skip: !available }, t => {
+  const f = fixture(t);
+  const real = path.join(f.root, "dotfiles/chrome");
+  fs.mkdirSync(path.join(real, "NativeMessagingHosts"), { recursive: true });
+  const linked = path.join(f.user, "chrome-link");
+  fs.symlinkSync(real, linked);
+  const manifests = path.join(linked, "NativeMessagingHosts");
+  const result = f.run("install", ["--model-dir", model, "--extension-dir", extension, "--manifest-dir", manifests]);
+  assert.equal(result.status, 0, result.stderr);
+  const registration = path.join(real, "NativeMessagingHosts", manifestName);
+  assert.equal(fs.lstatSync(registration).isFile(), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "setup.json"))).manifest_dir,
+    fs.realpathSync(path.join(real, "NativeMessagingHosts")));
+  const removed = f.run("uninstall", ["--manifest-dir", manifests]);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.ok(!fs.existsSync(registration));
+  assert.ok(fs.lstatSync(linked).isSymbolicLink(), "the user's symlink is left alone");
+});
+
+test("a symlinked registration file is still refused", { skip: !available }, t => {
+  const f = fixture(t);
+  fs.mkdirSync(f.manifests, { recursive: true });
+  const elsewhere = path.join(f.root, "elsewhere.json");
+  fs.writeFileSync(elsewhere, "{}");
+  fs.symlinkSync(elsewhere, path.join(f.manifests, manifestName));
+  const result = f.install();
+  assert.notEqual(result.status, 0);
+  assert.equal(fs.readFileSync(elsewhere, "utf8"), "{}");
+});
+
 test("upgrade updates extension at stable path; uninstall preserves unrelated profile and extension files", { skip: !available }, t => {
   const f = fixture(t);
   fs.writeFileSync(f.profile, "export PERSONAL=kept");
