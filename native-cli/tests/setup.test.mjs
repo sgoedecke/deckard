@@ -121,6 +121,21 @@ for (const shell of ["zsh", "bash"]) for (const original of [null, "", "export P
   });
 }
 
+test("a symlinked shell profile is refused with its path and a --shell none hint", { skip: !available }, t => {
+  const f = fixture(t);
+  const target = path.join(f.user, "dotfiles-zshrc");
+  fs.writeFileSync(target, "# managed elsewhere\n");
+  fs.symlinkSync(target, f.profile);
+  const refused = f.install();
+  assert.notEqual(refused.status, 0);
+  assert.ok(refused.stderr.includes(f.profile), refused.stderr);
+  assert.match(refused.stderr, /--shell none/);
+  assert.equal(fs.readFileSync(target, "utf8"), "# managed elsewhere\n");
+  const accepted = f.install(["--shell", "none"]);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(fs.readFileSync(target, "utf8"), "# managed elsewhere\n");
+});
+
 test("upgrade updates extension at stable path; uninstall preserves unrelated profile and extension files", { skip: !available }, t => {
   const f = fixture(t);
   fs.writeFileSync(f.profile, "export PERSONAL=kept");

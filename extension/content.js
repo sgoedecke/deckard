@@ -4,6 +4,10 @@
   globalThis.__deckardLocal = true;
   const C = globalThis.DeckardCore;
   if (!C || !C.originOf(location.href) || window.top !== window) return;
+  // crypto.randomUUID exists only in secure contexts (https, localhost); on
+  // plain-http pages it is undefined, so the page is skipped like any other
+  // unsupported origin instead of throwing.
+  if (typeof crypto.randomUUID !== "function") return;
   const runtime = chrome.runtime;
   const suffix = crypto.randomUUID().replaceAll("-", "");
   const flagClass = `deckard-marked-${suffix}`;

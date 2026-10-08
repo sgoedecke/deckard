@@ -110,7 +110,7 @@ void path_command_conflict(const fs::path& prefix) {
 bool path_present(const fs::path& path) {
     return fs::symlink_status(path).type() != fs::file_type::not_found;
 }
-void require_plain_path(const fs::path& path, bool directory) {
+void require_plain_path(const fs::path& path, bool directory, const std::string& hint) {
     auto absolute = fs::absolute(path).lexically_normal();
     fs::path current = absolute.root_path();
     for (const auto& part : absolute.relative_path()) {
@@ -118,11 +118,12 @@ void require_plain_path(const fs::path& path, bool directory) {
         if (!path_present(current)) continue;
         auto status = fs::symlink_status(current);
         if (current != absolute || directory) {
-            if (status.type() != fs::file_type::directory) conflict("Setup requires real directories, not redirected paths.");
+            if (status.type() != fs::file_type::directory)
+                conflict("Setup requires a real directory, not a redirected path: " + current.string() + "." + hint);
         } else {
             struct stat info {};
             if (status.type() != fs::file_type::regular || stat(current.c_str(), &info) || info.st_nlink != 1)
-                conflict("Setup requires private regular files, not symlinks or hard links.");
+                conflict("Setup requires a private regular file, not a symlink or hard link: " + current.string() + "." + hint);
         }
     }
 }
@@ -186,7 +187,8 @@ SetupTransaction::SetupTransaction(const fs::path& prefix, const fs::path& stage
              {"transaction_id", stage_.filename().string()}};
     if (!profile_.empty()) {
         path_command_conflict(prefix_);
-        require_plain_path(profile_, false);
+        require_plain_path(profile_, false, " Pass --shell none to skip shell profile management and add "
+                           "the Deckard bin directory to PATH yourself.");
         profile_existed_ = path_present(profile_);
         profile_before_ = profile_existed_ ? read_text(profile_) : "";
         auto original = previous_ ? strip_block(profile_before_, (*previous_)["path_block"]) : profile_before_;

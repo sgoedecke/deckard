@@ -4,7 +4,9 @@
 
 namespace aihider {
 bool path_present(const fs::path& path);
-void require_plain_path(const fs::path& path, bool directory);
+// Rejects symlinks and hard links anywhere along `path`. `hint` is appended to
+// the conflict message to tell the user how to avoid the check.
+void require_plain_path(const fs::path& path, bool directory, const std::string& hint = "");
 void validate_prefix(const fs::path& prefix);
 std::optional<Json> setup_metadata(const fs::path& prefix);
 void validate_setup(const fs::path& prefix, const Json& metadata, bool upgrading);
