@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: Extension and release tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm test
+
+  native:
+    name: Native (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Core ML
+            os: macos-15
+            manifest: native-cli/model-assets.json
+          - name: Linux Candle
+            os: ubuntu-24.04
+            manifest: native-cli/model-assets-linux.json
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libcurl4-openssl-dev zsh
+      - name: Cache native build dependencies
+        uses: actions/cache@v4
+        with:
+          path: cache/native-build
+          key: native-deps-${{ runner.os }}-${{ hashFiles('native-cli/bootstrap*.sh', 'native-cli/tokenizer/Cargo.lock', 'native-cli/candle/Cargo.lock') }}
+      - name: Build
+        run: scripts/build-native.sh
+      - name: Cache model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/deckard-model
+          key: model-${{ runner.os }}-${{ hashFiles(matrix.manifest) }}
+      - name: Fetch pinned model
+        id: model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-fetch-model.sh "$RUNNER_TEMP/deckard-model"
+      - name: Native tests
+        env:
+          DECKARD_MODEL_DIR: ${{ steps.model.outputs.model_dir }}
+        run: npm run test:native
