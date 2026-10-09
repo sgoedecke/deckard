@@ -18,7 +18,8 @@ test("production Core ML target has no MLX or GPU configuration",
   const host = fs.readFileSync(path.join(native, "src/host.cpp"), "utf8");
   assert.doesNotMatch(cmake, /find_package\(MLX|src\/gradient\.cpp|libmlx|mlx\.metallib/);
   assert.match(cmake, /-fobjc-arc/);
-  assert.match(cmake, /CMAKE_CONFIGURE_DEPENDS.*model-assets\.json/);
+  assert.match(cmake, /set\(MODEL_ASSETS_FILE "\$\{CMAKE_CURRENT_SOURCE_DIR\}\/model-assets\.json"\)/);
+  assert.match(cmake, /CMAKE_CONFIGURE_DEPENDS "\$\{MODEL_ASSETS_FILE\}"/);
   assert.match(runtime, /configuration\.computeUnits = MLComputeUnitsCPUAndNeuralEngine;/);
   assert.doesNotMatch(runtime, /MLComputeUnitsAll|MLComputeUnitsCPUAndGPU|_ANE|dlsym|dlopen/);
   assert.match(host, /default_priority\(\)/);
