@@ -46,7 +46,7 @@ jobs:
           node-version: 24
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libcurl4-openssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libcurl4-openssl-dev zsh
       - name: Cache native build dependencies
         uses: actions/cache@v4
         with:
