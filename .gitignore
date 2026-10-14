@@ -9,6 +9,7 @@
 /native-cli/tests/.installation-*/
 /native-cli/tests/.rollback-*/
 /native-cli/tests/.setup-*/
+/native-cli/tests/.accuracy-*/
 *.log
 .DS_Store
 *.pem

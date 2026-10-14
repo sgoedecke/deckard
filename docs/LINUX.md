@@ -115,6 +115,14 @@ The native suites run against the Linux binary. Tests that only apply to
 macOS, such as those for the Core ML runtime or for upgrading from earlier
 macOS releases, are skipped on Linux.
 
+`linux-accuracy.test.mjs` checks Candle's scores, not only that it runs: with
+the model available, `deckard verify` must reproduce reference logits that
+PyTorch computed from the pinned checkpoint
+(`native-cli/tests/fixtures/linux-reference.json`) within its 0.002 score
+tolerance. When the pin in `model-assets-linux.json` changes, regenerate them
+with `native-cli/tests/fixtures/linux_reference.py` (needs `torch` and
+`transformers`); the test fails until then.
+
 The Candle crate has its own unit tests (`cargo test` in `native-cli/candle`);
 set `DECKARD_CANDLE_CONFIG` and `DECKARD_CANDLE_WEIGHTS` to also run one real
 inference.
