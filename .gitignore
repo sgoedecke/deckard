@@ -5,6 +5,7 @@
 /native-cli/tokenizer/target/
 /native-cli/candle/target/
 /native-cli/tests/.uninstall-*/
+/native-cli/tests/.linux-cli-*/
 /native-cli/tests/.installation-*/
 /native-cli/tests/.rollback-*/
 /native-cli/tests/.setup-*/

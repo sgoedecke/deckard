@@ -118,3 +118,8 @@ macOS releases, are skipped on Linux.
 The Candle crate has its own unit tests (`cargo test` in `native-cli/candle`);
 set `DECKARD_CANDLE_CONFIG` and `DECKARD_CANDLE_WEIGHTS` to also run one real
 inference.
+
+`linux-cli.test.mjs` covers the Linux side of `deckard install` and the host:
+the default paths, the model cache (reuse without network, resumed and
+corrupt files, `--no-download`) and a host started under `nice`. Downloads go
+to a dead proxy there, so these tests never use the network.
