@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <list>
 #include <sstream>
@@ -22,9 +23,61 @@ void deadline(int) {
 Json failure(const Json& id, const std::string& code, const std::string& message) {
     return {{"id", id}, {"ok", false}, {"error", {{"code", code}, {"message", message}}}};
 }
+#if defined(__linux__)
+// A ModelBackend whose logit() runs a script, for the fallback self-test.
+class ScriptedBackend : public ModelBackend {
+public:
+    ScriptedBackend(const char* runtime, std::function<double()> script)
+        : runtime_(runtime), script_(std::move(script)) {}
+    double logit(const std::vector<uint32_t>&, const std::vector<uint32_t>&) override { return script_(); }
+    const char* runtime() const override { return runtime_; }
+private:
+    const char* runtime_;
+    std::function<double()> script_;
+};
+// Backend::Auto's fallback policy with scripted runtimes: ONNX Runtime serves
+// while it works; Candle takes over for good when ONNX Runtime cannot start or
+// fails mid-inference; integrity errors and invalid input are never hidden.
+void auto_backend_self_test(const std::function<void(bool)>& require) {
+    const std::vector<uint32_t> ids{1, 5, 2}, mask{1, 1, 1};
+    auto thrown = [&](const std::function<void()>& action) -> std::string {
+        try { action(); } catch (const Error& error) { return error.code; }
+        return "";
+    };
+    int onnx_calls = 0, candle_starts = 0;
+    auto onnx = [&] { return std::make_unique<ScriptedBackend>("native-onnx", [&]() -> double {
+        if (++onnx_calls == 2) throw Error("inference_failed", "scripted");
+        return 1;
+    }); };
+    auto candle = [&] { ++candle_starts; return std::make_unique<ScriptedBackend>("native-candle", [] { return 2.0; }); };
+    std::ostringstream log;
+    auto model = make_auto_backend(onnx, candle, log);
+    require(model->logit(ids, mask) == 1 && std::string(model->runtime()) == "native-onnx" && !candle_starts);
+    require(model->logit(ids, mask) == 2 && std::string(model->runtime()) == "native-candle");
+    require(model->logit(ids, mask) == 2 && onnx_calls == 2 && candle_starts == 1);
+    require(log.str() == "Deckard: onnx_fallback (inference_failed); using Candle on the CPU.\n");
+
+    auto unavailable = [&]() -> std::unique_ptr<ModelBackend> { throw Error("onnx_unavailable", "scripted"); };
+    model = make_auto_backend(unavailable, candle, log);
+    require(model->logit(ids, mask) == 2 && std::string(model->runtime()) == "native-candle");
+
+    for (const char* integrity : {"asset_mismatch", "missing_assets"}) {
+        auto tampered = [&]() -> std::unique_ptr<ModelBackend> { throw Error(integrity, "scripted"); };
+        require(thrown([&] { make_auto_backend(tampered, candle, log); }) == integrity);
+    }
+    candle_starts = 0;
+    auto rejects = [] { return std::make_unique<ScriptedBackend>("native-onnx", []() -> double {
+        throw Error("invalid_input", "scripted");
+    }); };
+    model = make_auto_backend(rejects, candle, log);
+    require(thrown([&] { model->logit(ids, mask); }) == "invalid_input");
+    require(std::string(model->runtime()) == "native-onnx" && !candle_starts);
+}
+#endif
 }
 struct Analyzer::Impl {
     fs::path home;
+    Backend backend = Backend::Auto;
     std::unique_ptr<Tokenizer> tokenizer;
     std::unique_ptr<ModelBackend> model;
     std::list<std::pair<std::string, Json>> cache;
@@ -36,13 +89,18 @@ struct Analyzer::Impl {
         tokenizer = std::make_unique<Tokenizer>(path);
     }
 };
-Analyzer::Analyzer(fs::path home) : impl_(std::make_unique<Impl>()) { impl_->home = std::move(home); }
+Analyzer::Analyzer(fs::path home, Backend backend) : impl_(std::make_unique<Impl>()) {
+    impl_->home = std::move(home);
+    impl_->backend = backend;
+}
 Analyzer::~Analyzer() = default;
 Json Analyzer::ping() {
     installed_config(impl_->home, false);
     Json result = identity();
+    // The runtime that serves inference once the model is loaded (on Linux,
+    // ONNX Runtime or Candle after a fallback); the platform default before.
     result.update({{"status", "ready"}, {"model_loaded", bool(impl_->model)},
-                   {"runtime", runtime_id}, {"scheduling", "default"},
+                   {"runtime", impl_->model ? impl_->model->runtime() : runtime_id}, {"scheduling", "default"},
                    {"max_chars", 20000}, {"max_chunks", 4}});
     return result;
 }
@@ -92,7 +150,7 @@ Json Analyzer::analyze(const std::string& text) {
         size_t chunk_words = words(impl_->tokenizer->decode(parts[index]));
         if (chunk_words < min_words) { short_chunk = true; continue; }
         if (!impl_->model)
-            impl_->model = create_model_backend(fs::canonical(impl_->home) / "models", model_cache());
+            impl_->model = create_model_backend(fs::canonical(impl_->home) / "models", model_cache(), impl_->backend);
         auto tokens = impl_->tokenizer->wrap(parts[index]);
         double score = sigmoid(impl_->model->logit(tokens, std::vector<uint32_t>(tokens.size(), 1)));
         chunks.push_back({{"index", index}, {"score", score}, {"tokens", parts[index].size()}, {"words", chunk_words}});
@@ -229,11 +287,11 @@ void write_frame(std::ostream& stream, const Json& message) {
     stream.flush();
     if (!stream) throw Error("port_closed", "Native port closed.");
 }
-int serve(const fs::path& home) {
+int serve(const fs::path& home, Backend backend) {
     default_priority();
     std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGALRM, deadline);
-    Analyzer analyzer(home);
+    Analyzer analyzer(home, backend);
     while (true) {
         Json request;
         try {
@@ -273,6 +331,11 @@ void self_test() {
     require(text_sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     require(extension_id_valid(std::string(32, 'a')) && !extension_id_valid(std::string(32, 'q')));
     require(windows({}).empty());
+    require(resolve_backend("/nonexistent/deckard-model", Backend::Auto) == Backend::Candle);
+    require(resolve_backend("/nonexistent/deckard-model", Backend::Onnx) == Backend::Onnx);
+#if defined(__linux__)
+    auto_backend_self_test(require);
+#endif
     for (size_t count : {1, 510, 511, 2040, 2041}) {
         auto parts = windows(std::vector<uint32_t>(count, 7));
         size_t total = 0;

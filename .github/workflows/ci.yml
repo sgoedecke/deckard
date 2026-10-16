@@ -64,7 +64,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/ci-fetch-model.sh "$RUNNER_TEMP/deckard-model"
+      # Linux also runs the ONNX Runtime tests on model.onnx, which nobody
+      # publishes: CI exports it once from the checkpoint and caches it.
+      - name: Cache model.onnx
+        id: onnx-cache
+        if: runner.os == 'Linux' && steps.model.outputs.model_dir
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/deckard-model-onnx/model.onnx
+          key: onnx-${{ hashFiles('native-cli/model-assets-onnx.json', 'native-cli/model-assets-linux.json', 'native-cli/onnx/**') }}
+      - name: Set up Python for the model.onnx export
+        if: runner.os == 'Linux' && steps.model.outputs.model_dir && steps.onnx-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Export pinned model.onnx
+        id: onnx
+        if: runner.os == 'Linux' && steps.model.outputs.model_dir
+        env:
+          CHECKPOINT: ${{ steps.model.outputs.model_dir }}
+        run: |
+          out="$RUNNER_TEMP/deckard-model-onnx"
+          mkdir -p "$out"
+          ln -f "$CHECKPOINT/config.json" "$CHECKPOINT/model.safetensors" "$CHECKPOINT/tokenizer.json" "$out/"
+          scripts/export-onnx.sh "$out"
+          echo "model_dir=$out" >> "$GITHUB_OUTPUT"
       - name: Native tests
         env:
-          DECKARD_MODEL_DIR: ${{ steps.model.outputs.model_dir }}
+          DECKARD_MODEL_DIR: ${{ steps.onnx.outputs.model_dir || steps.model.outputs.model_dir }}
         run: npm run test:native

@@ -11,7 +11,8 @@ const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/b
 const model = process.env.DECKARD_MODEL_DIR;
 const available = modelAvailable(model);
 const run = (exe, args, input) => spawnSync(exe, args, {
-  input, encoding: input ? undefined : "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
+  // Linux installs copy and hash the fp32 checkpoint and model.onnx (about 3.5 GB).
+  input, encoding: input ? undefined : "utf8", timeout: 300000, maxBuffer: 1024 * 1024,
 });
 
 test("installation is idempotent, conflict-safe, relocatable, and independent of Python", { skip: !available }, t => {
