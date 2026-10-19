@@ -74,7 +74,7 @@ add_custom_target(dependency_notices ALL
 
 add_executable(deckard src/main.cpp src/gradient_backend.cpp ${DECKARD_PLATFORM_SOURCES} src/tokenizer.cpp
   src/support.cpp src/host.cpp src/setup.cpp)
-target_include_directories(deckard PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_include_directories(deckard PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated" ${DECKARD_PLATFORM_INCLUDES})
 set_source_files_properties(src/coreml_gradient.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(deckard PRIVATE -Wall -Wextra
   "-ffile-prefix-map=${AI_HIDER_ROOT}=/deckard-source"

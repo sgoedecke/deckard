@@ -29,7 +29,8 @@ function fixture(t, shell = "zsh", useDefaultHome = false) {
   delete env.DECKARD_HOME;
   const run = (command, args = [], extraEnv = {}) => spawnSync(binary,
     [command, ...(useDefaultHome ? [] : ["--home", home]), ...args], {
-      encoding: "utf8", timeout: 30000, env: { ...env, ...extraEnv },
+      // Linux installs copy and hash the fp32 checkpoint and model.onnx (about 3.5 GB).
+      encoding: "utf8", timeout: 300000, env: { ...env, ...extraEnv },
     });
   const install = (args = [], extraEnv = {}) => run("install",
     ["--model-dir", model, "--extension-dir", extension, "--manifest-dir", manifests, ...args], extraEnv);

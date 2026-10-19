@@ -38,8 +38,8 @@ inline constexpr const char* tokenizer_sha = upstream_tokenizer_sha;
 inline constexpr const char* native_source = "verified-candle-export";
 inline constexpr const char* native_description = "Deckard native Gradient Candle (experimental marking)";
 inline constexpr const char* native_compute_units = "cpu";
-inline constexpr const char* model_assets_name = "Candle model assets";
-inline constexpr const char* model_package_name = "Candle model directory";
+inline constexpr const char* model_assets_name = "Model assets";
+inline constexpr const char* model_package_name = "model directory";
 inline constexpr const char* reinstall_hint = "Run deckard install.";
 #endif
 
@@ -62,7 +62,14 @@ void background();
 void default_priority();
 const Json& model_assets();
 std::string model_assets_id();
+// Pinned model files that may be absent, name -> SHA-256 (Linux: model.onnx,
+// from model-assets-onnx.json; none on macOS). Installed and verified when
+// present; not part of model_assets() or model_assets_id().
+const Json& optional_model_files();
 void verify_model_assets(const fs::path& directory, bool verify_hashes = true, bool allow_unpinned = false);
+// Checks one pinned model file (from model_assets() or
+// optional_model_files()) against its SHA-256, for backends that load only some files.
+void require_model_file(const fs::path& directory, const std::string& name);
 fs::path model_cache();
 bool extension_id_valid(const std::string& id);
 size_t characters(const std::string& text);

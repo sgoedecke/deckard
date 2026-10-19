@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "model": "ShantanuT01/gradient-ai-text-detector",
+  "revision": "c2e8b6df87f8a211cbffb713fa9873a0c3a9713f",
+  "precision": "fp32",
+  "files": {
+    "model.onnx": "68c607e4d7a7ae19e8337f0eeee31eb03919d09dc26848ffaad931a224f9183d"
+  }
+}

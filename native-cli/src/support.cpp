@@ -1,5 +1,8 @@
 #include "support.hpp"
 #include "model_assets.hpp"
+#if defined(__linux__)
+#include "onnx_assets.hpp"
+#endif
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
 #else
@@ -313,6 +316,14 @@ const Json& model_assets() {
     return assets;
 }
 std::string model_assets_id() { return model_assets_sha256; }
+const Json& optional_model_files() {
+#if defined(__linux__)
+    static const auto files = Json::parse(onnx_assets_json).at("files");
+#else
+    static const auto files = Json::object();
+#endif
+    return files;
+}
 fs::path model_cache() {
 #if defined(__APPLE__)
     return user_home() / "Library/Caches/Deckard/coreml";
@@ -342,17 +353,39 @@ void verify_model_assets(const fs::path& directory, bool verify_hashes, bool all
         }
         if (verify_hashes) require_hash(root / relative, it.value().get<std::string>());
     }
+    // Optional pinned files (Linux: model.onnx) may be absent; when present they
+    // must be ordinary files with the pinned digest.
+    const auto& optional = optional_model_files();
+    for (auto it = optional.begin(); it != optional.end(); ++it) {
+        const auto path = root / it.key();
+        const auto status = fs::symlink_status(path);
+        if (status.type() == fs::file_type::not_found) continue;
+        if (!fs::is_regular_file(status))
+            throw Error("asset_mismatch", "Model assets must be ordinary files and directories, not links.");
+        // Typically a model.onnx exported before its pin changed.
+        if (verify_hashes && sha256(path) != it.value().get<std::string>())
+            throw Error("asset_mismatch", it.key() + " in " + root.string() + " does not match its pin. Export it again "
+                        "(scripts/export-onnx.sh), or delete it to use Candle.");
+    }
     // The runtime must never consume extra, unpinned files hidden inside the
-    // package (Core ML) or the model directory itself (Candle, no package).
+    // package (Core ML) or the model directory itself (Linux, no package).
     if (allow_unpinned) return;
     const auto package = root / model_assets().value("model_package", std::string());
     for (const auto& entry : fs::recursive_directory_iterator(package)) {
         const auto relative = entry.path().lexically_relative(root);
         const auto status = entry.symlink_status();
         if ((fs::is_directory(status) && directories.count(relative)) ||
-            (fs::is_regular_file(status) && files.contains(relative.generic_string()))) continue;
+            (fs::is_regular_file(status) && (files.contains(relative.generic_string()) ||
+                                              optional.contains(relative.generic_string())))) continue;
         throw Error("asset_mismatch", "The " + std::string(model_package_name) + " contains unexpected assets.");
     }
+}
+void require_model_file(const fs::path& directory, const std::string& name) {
+    const auto& assets = model_assets();
+    const auto& optional = optional_model_files();
+    const Json& pins = assets.at("files").contains(name) ? assets.at("files") : optional;
+    if (!pins.contains(name)) throw Error("asset_mismatch", name + " is not a pinned model file.");
+    require_hash(directory / name, pins.at(name).get<std::string>());
 }
 bool extension_id_valid(const std::string& id) {
     return id.size() == 32 && id.find_first_not_of("abcdefghijklmnop") == std::string::npos;
