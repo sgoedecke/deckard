@@ -22,13 +22,16 @@ There is no Linux release bundle yet, so Deckard is built from source.
 ## Build
 
 System packages (names vary by distribution): a C++20 compiler, CMake 3.24+,
-`pkg-config`, `curl`, `unzip`, and the OpenSSL and libcurl development headers
-(for example `g++ cmake pkg-config curl unzip libssl-dev libcurl4-openssl-dev`
-on Debian/Ubuntu).
+`make`, `pkg-config`, `curl`, `unzip`, and the OpenSSL and libcurl development
+headers (for example `g++ cmake make pkg-config curl unzip libssl-dev
+libcurl4-openssl-dev` on Debian/Ubuntu).
 
 ```sh
-scripts/build-native.sh
+make build    # scripts/build-native.sh
 ```
+
+`make` lists every target. Each wraps a script or `deckard` command named
+here, and the targets that run `deckard` build it first.
 
 `native-cli/bootstrap.sh` hands Linux off to `native-cli/bootstrap-linux.sh`,
 which fills `cache/native-build` with the pinned dependencies: nlohmann/json,
@@ -45,11 +48,17 @@ tgz: C headers, pre-compiled library, license notices; the version is set in
 
 ## Install
 
-From the repository root:
+From the repository root, pick a runtime (`make install` lists both):
 
 ```sh
-native-cli/build/dist/bin/deckard install --extension-dir extension
+make install-candle   # Candle: only the 1.7 GB download
+make install-onnx     # ONNX Runtime: about 5x faster; exports model.onnx first
 ```
+
+Both run `native-cli/build/dist/bin/deckard install --extension-dir extension`;
+the choice is which model files it finds (see
+[Installing with model.onnx](#installing-with-modelonnx)). Running the other
+target switches runtimes.
 
 A source build has no packaged extension next to the binary, so
 `--extension-dir` points install at the repository's `extension/` folder; it
@@ -66,8 +75,8 @@ files in `DIR` are ignored); `--no-download` fails instead of downloading
 missing files. Then load `~/.local/share/deckard/extension` unpacked in Chrome
 as described in the README.
 
-This installs Candle; with a pinned `model.onnx` in the same directory, ONNX
-Runtime (see [Installing with model.onnx](#installing-with-modelonnx)).
+`deckard install` itself installs Candle, or ONNX Runtime when a pinned
+`model.onnx` is in the same directory.
 
 ## Performance
 
@@ -163,8 +172,10 @@ cannot share bytes: `model.onnx` stores every weight again, 1.21 of its
 
 Nobody publishes `model.onnx`, so `scripts/export-onnx.sh` exports it from
 the checkpoint, and install takes it from where it takes the other files
-(`~/.cache/deckard` or `--model-dir`). After [Install](#install), which
-downloaded the checkpoint the export reads, from the repository root:
+(`~/.cache/deckard` or `--model-dir`). `make install-onnx` does all of it:
+without a checkpoint in `~/.cache/deckard` it installs first (which
+downloads it), then runs the script (`make export-onnx`; a no-op once
+`model.onnx` matches its pin) and installs again. By hand:
 
 ```sh
 scripts/export-onnx.sh                                               # writes ~/.cache/deckard/model.onnx
@@ -179,7 +190,8 @@ Then click Reload on the extension in `chrome://extensions`.
   `native-cli/onnx/export/requirements.txt` (mainly torch 2.10 for the CPU,
   transformers, onnx; about 1.3 GB) into a temporary venv in the model
   directory (on disk, unlike a RAM-backed `/tmp`) and removes them
-  afterwards. The export takes a few minutes and up to about 10 GB of memory.
+  afterwards. The export takes about 2 minutes on the i5-8500T (131 s
+  including the package download) and up to about 10 GB of memory.
 - `native-cli/onnx/export.py` reproduces the pin byte for byte on any x86_64
   CPU (it forces CPU-independent PyTorch and MKL kernels); the script fails
   if it does not.
@@ -187,14 +199,25 @@ Then click Reload on the extension in `chrome://extensions`.
   Absent: Candle. Wrong SHA-256: the install fails with `asset_mismatch` and
   changes nothing.
 - After a pin change, run the script again: it replaces the old `model.onnx`.
-- Back to Candle: delete `~/.cache/deckard/model.onnx` and install again.
+- Back to Candle: `make install-candle`. It installs from links to the
+  three checkpoint files only, so `model.onnx` stays in `~/.cache/deckard`
+  for switching back.
 
 ## Test
 
 ```sh
-npm test
-DECKARD_MODEL_DIR=~/.cache/deckard npm run test:native
+make test     # npm test, then the native suites on Candle and ONNX Runtime
+make verify   # deckard verify --candle and --onnx against the PyTorch reference
 ```
+
+Both use the model in `~/.cache/deckard` and need `model.onnx` there
+(`make install-onnx` gets everything). They hard-link the model files into
+`native-cli/build/test-model`, because the cache also holds the ONNX Runtime
+library and `verify` refuses unpinned files in the model directory. For the
+same reason `make test` sets `TMPDIR` inside `native-cli/build`: the tests
+hard-link the model, which fails across file systems (a tmpfs `/tmp`). By
+hand: `npm test`, then `npm run test:native` with `DECKARD_MODEL_DIR` set to
+a directory holding only the model files.
 
 The native suites run against the Linux binary. Tests that only apply to
 macOS, such as those for the Core ML runtime or for upgrading from earlier
@@ -218,6 +241,9 @@ ONNX Runtime (`--onnx`) against the same reference.
 The Candle crate has its own unit tests (`cargo test` in `native-cli/candle`);
 set `DECKARD_CANDLE_CONFIG` and `DECKARD_CANDLE_WEIGHTS` to also run one real
 inference.
+
+`tests/makefile.test.mjs` runs the Makefile targets with a stub `deckard`
+and stand-in model files.
 
 `linux-cli.test.mjs` covers the Linux side of `deckard install` and the host:
 the default paths, the model cache (reuse without network, resumed and

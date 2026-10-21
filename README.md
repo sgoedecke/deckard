@@ -61,6 +61,14 @@ Use a current Node.js with the built-in test runner:
 npm test
 ```
 
+`make` lists shortcuts for the steps below and in `docs/LINUX.md`:
+
+```sh
+make build     # build deckard (macOS and Linux)
+make test      # every suite this machine can run; on Linux on Candle and ONNX Runtime
+make install   # macOS: install; Linux: lists install-candle and install-onnx
+```
+
 Extension tests need no npm dependencies. Native tests/builds require the native
 toolchain and fixtures; release users do not. On a supported Mac, with a
 prepared dependency cache and canonical quantized model directory:
