@@ -29,7 +29,10 @@ if ! verified; then
   if [ "$(uname -s)" = Darwin ]; then
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
-    gh release download -R "${GITHUB_REPOSITORY:-sgoedecke/deckard}" -D "$work" \
+    # A fork has no releases: use those of the repository it was forked from.
+    repo=${GITHUB_REPOSITORY:-sgoedecke/deckard}
+    source=$(gh api "repos/$repo" --jq '.source.full_name // empty')
+    gh release download -R "${source:-$repo}" -D "$work" \
       -p 'deckard-v*-macos-arm64.tar.gz' -p SHA256SUMS >&2
     archive=$(cd "$work" && ls deckard-v*-macos-arm64.tar.gz)
     (cd "$work" && grep "  $archive\$" SHA256SUMS | shasum -a 256 -c -) >&2
