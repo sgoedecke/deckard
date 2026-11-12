@@ -11,6 +11,25 @@ export const nativeSource = assets.runtime === "native-candle" ? "verified-candl
 export function modelAvailable(directory) {
   return !!directory && Object.keys(assets.files).every(name => fs.existsSync(path.join(directory, name)));
 }
+// Setup and transaction tests need the platform model, but not Linux's
+// optional ONNX export. Keep those installs small even when the shared cache
+// also has model.onnx; backend-specific suites still use the complete model.
+// The caller owns destination and removes it with its existing test fixture.
+export function requiredModelDirectory(source, destination) {
+  if (process.platform !== "linux") return source;
+  for (const name of Object.keys(assets.files)) {
+    const target = path.join(destination, name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    try {
+      fs.linkSync(path.join(source, name), target);
+    } catch (error) {
+      if (error.code !== "EXDEV") throw error;
+      fs.copyFileSync(path.join(source, name), target, fs.constants.COPYFILE_FICLONE);
+    }
+  }
+  return destination;
+}
+
 export const version = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url))).version;
 
 export function installationMetadata() {

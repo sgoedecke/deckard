@@ -5,11 +5,11 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { assets, modelAvailable, version } from "./model-fixture.mjs";
+import { assets, modelAvailable, requiredModelDirectory, version } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
-const model = process.env.DECKARD_MODEL_DIR;
-const available = modelAvailable(model);
+const modelSource = process.env.DECKARD_MODEL_DIR;
+const available = modelAvailable(modelSource);
 const extension = fileURLToPath(new URL("../../extension", import.meta.url));
 const manifestName = "com.sgoedecke.deckard.json";
 const key = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"))).key;
@@ -19,6 +19,7 @@ const id = key && [...createHash("sha256").update(Buffer.from(key, "base64")).di
 function fixture(t, shell = "zsh", useDefaultHome = false) {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".setup-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const model = requiredModelDirectory(modelSource, path.join(root, "required model"));
   const user = path.join(root, "user home");
   const defaultHome = process.platform === "darwin" ? "Deckard" : ".local/share/deckard";
   const home = path.join(user, useDefaultHome ? defaultHome : "Library/Application Support/Deckard's app");
@@ -29,12 +30,12 @@ function fixture(t, shell = "zsh", useDefaultHome = false) {
   delete env.DECKARD_HOME;
   const run = (command, args = [], extraEnv = {}) => spawnSync(binary,
     [command, ...(useDefaultHome ? [] : ["--home", home]), ...args], {
-      // Linux installs copy and hash the fp32 checkpoint and model.onnx (about 3.5 GB).
+      // Real model installs copy and hash the required platform files (1.7 GB on Linux).
       encoding: "utf8", timeout: 300000, env: { ...env, ...extraEnv },
     });
   const install = (args = [], extraEnv = {}) => run("install",
     ["--model-dir", model, "--extension-dir", extension, "--manifest-dir", manifests, ...args], extraEnv);
-  return { root, user, home, manifests, profile, env, run, install };
+  return { root, user, home, manifests, profile, env, run, install, model };
 }
 
 test("default installation uses the visible Deckard folder and uninstalls without --home", { skip: !available }, t => {
@@ -145,7 +146,7 @@ test("a Chrome manifest directory behind a user-owned symlink is resolved, not r
   const linked = path.join(f.user, "chrome-link");
   fs.symlinkSync(real, linked);
   const manifests = path.join(linked, "NativeMessagingHosts");
-  const result = f.run("install", ["--model-dir", model, "--extension-dir", extension, "--manifest-dir", manifests]);
+  const result = f.run("install", ["--model-dir", f.model, "--extension-dir", extension, "--manifest-dir", manifests]);
   assert.equal(result.status, 0, result.stderr);
   const registration = path.join(real, "NativeMessagingHosts", manifestName);
   assert.equal(fs.lstatSync(registration).isFile(), true);
@@ -176,7 +177,7 @@ test("upgrade updates extension at stable path; uninstall preserves unrelated pr
   const copy = path.join(f.root, "new extension");
   fs.cpSync(extension, copy, { recursive: true });
   fs.appendFileSync(path.join(copy, "popup.css"), "\n/* upgrade fixture */\n");
-  let result = f.run("install", ["--model-dir", model, "--extension-dir", copy]);
+  let result = f.run("install", ["--model-dir", f.model, "--extension-dir", copy]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(fs.readFileSync(path.join(f.home, "extension/popup.css"), "utf8"), /upgrade fixture/);
   fs.appendFileSync(f.profile, "# unrelated later edit\n");
@@ -278,7 +279,7 @@ test("activation failure rolls back published PATH and extension without deletin
   const f = fixture(t);
   fs.mkdirSync(f.home, { recursive: true });
   fs.writeFileSync(f.profile, "original profile bytes");
-  const child = spawn(binary, ["install", "--home", f.home, "--model-dir", model,
+  const child = spawn(binary, ["install", "--home", f.home, "--model-dir", f.model,
     "--extension-dir", extension, "--manifest-dir", f.manifests], { env: f.env, stdio: ["ignore", "pipe", "pipe"] });
   const pointer = path.join(f.home, `.current-${child.pid}`);
   fs.writeFileSync(pointer, "foreign pointer");

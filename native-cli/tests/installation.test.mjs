@@ -5,19 +5,20 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalJson, installationMetadata, modelAvailable } from "./model-fixture.mjs";
+import { canonicalJson, installationMetadata, modelAvailable, requiredModelDirectory } from "./model-fixture.mjs";
 
 const binary = process.env.DECKARD_BIN || fileURLToPath(new URL("../build/dist/bin/deckard", import.meta.url));
-const model = process.env.DECKARD_MODEL_DIR;
-const available = modelAvailable(model);
+const modelSource = process.env.DECKARD_MODEL_DIR;
+const available = modelAvailable(modelSource);
 const run = (exe, args, input) => spawnSync(exe, args, {
-  // Linux installs copy and hash the fp32 checkpoint and model.onnx (about 3.5 GB).
+  // Real model installs copy and hash the required platform files (1.7 GB on Linux).
   input, encoding: input ? undefined : "utf8", timeout: 300000, maxBuffer: 1024 * 1024,
 });
 
 test("installation is idempotent, conflict-safe, relocatable, and independent of Python", { skip: !available }, t => {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".installation-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
+  const model = requiredModelDirectory(modelSource, path.join(root, "required model"));
   const home = path.join(root, "application");
   const manifests = path.join(root, "manifests");
   const args = ["install", "--home", home, "--manifest-dir", manifests, "--extension-id", "a".repeat(32),
@@ -80,6 +81,7 @@ test("installation is idempotent, conflict-safe, relocatable, and independent of
 test("registration failure cannot activate a new release", { skip: !available }, t => {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".rollback-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
+  const model = requiredModelDirectory(modelSource, path.join(root, "required model"));
   const home = path.join(root, "application");
   const manifests = path.join(root, "manifests");
   const args = ["install", "--home", home, "--manifest-dir", manifests, "--model-dir", model,
@@ -98,6 +100,7 @@ test("owned MLX 0.5 metadata upgrades to Core ML without losing registration or 
   { skip: !available || (process.platform !== "darwin" && "earlier Deckard releases were macOS-only") }, t => {
   const root = fs.mkdtempSync(fileURLToPath(new URL(".migration-", import.meta.url)));
   t.after(() => fs.rmSync(root, { recursive: true }));
+  const model = requiredModelDirectory(modelSource, path.join(root, "required model"));
   const home = path.join(root, "application");
   const manifests = path.join(root, "manifests");
   const config = {
